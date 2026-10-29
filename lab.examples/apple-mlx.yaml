@@ -1,0 +1,33 @@
+# A Mac with Apple Silicon serving through MLX (mlx_lm.server) or llama.cpp (llama-server). Everything runs on the
+# machine the agent runs on ("local"), so no ssh. Models are files on disk; there is nothing to ship.
+hosts:
+  mac:
+    local: true
+    platform: apple          # probe: memory pressure, CPU, thermal state (no sudo)
+
+live:
+  backend: command
+  host: mac
+  cwd: ~/models
+  start: "nohup mlx_lm.server --model mlx-community/Qwen3.8-27B-4bit --port 8080 > ~/mlx.log 2>&1 &"
+  stop: "pkill -f mlx_lm.server || true"
+  api: http://127.0.0.1:8080/v1
+  model: mlx-community/Qwen3.8-27B-4bit
+
+targets:
+  mlx-4bit:
+    inherit: live
+    artifact: ~/.cache/huggingface/hub/models--mlx-community--Qwen3.8-27B-4bit/refs/main   # hashed by `plan` so a run names the weights it used
+    chunk: 512                                                                          # the server's prefill batch: boundary prompts are cut around it
+  llama-cpp:
+    backend: command
+    host: mac
+    cwd: ~/llama.cpp
+    start: "nohup ./build/bin/llama-server -m ~/models/qwen3.8-27b-q4_k_m.gguf -c 32768 -ngl 99 --port 8081 > ~/llama.log 2>&1 &"
+    stop: "pkill -f llama-server || true"
+    api: http://127.0.0.1:8081/v1
+    model: qwen3.8-27b-q4_k_m
+    chunk: 2048                 # -b / --batch-size
+    env: { LLAMA_ARG_FLASH_ATTN: "1" }
+
+users: "just me"

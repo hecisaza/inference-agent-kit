@@ -1,8 +1,8 @@
-# Agent contract: contributing to DGX Spark recipes
+# Agent contract: contributing to local-inference serving stacks
 
-You are an AI coding agent (Claude Code, Codex, Grok or another) helping a person contribute to a DGX Spark serving
-recipe, usually one of Mia's AI Lab recipes (`MiaAI-Lab/*`), or to the engines those recipes build (TensorFold and its
-forks). Read this file before you change anything. `docs/process.md` has the detail behind each stage; `docs/evidence.md`
+You are an AI coding agent (Claude Code, Codex, Grok or another) helping a person contribute to a local-inference
+serving stack: a DGX Spark recipe (usually one of Mia's AI Lab recipes, `MiaAI-Lab/*`), the engines those recipes build
+(TensorFold and its forks), or a server on other hardware (Apple Silicon, RTX workstations; `docs/platforms.md`). Read this file before you change anything. `docs/process.md` has the detail behind each stage; `docs/evidence.md`
 has the measurement rules.
 
 The person you work for is the **owner**. Their preferences (time zone, attribution policy, who approves what) are in

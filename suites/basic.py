@@ -17,19 +17,23 @@ def smoke(ctx):
     return {"ok": all(checks.values()), "checks": checks, "ttft_stream_s": s.get("ttft")}
 
 
-BOUNDARY_LENGTHS = (5, 2047, 2048, 2049, 4095, 4096, 4097, 6143, 6144, 6145, 8193, 12289)
+def boundary_lengths(chunk):
+    """Prompt lengths around the engine's chunk ends: 5, then c-1, c, c+1 for the first three chunks, then 4c+1 and 6c+1."""
+    c = int(chunk)
+    return (5,) + tuple(k * c + d for k in (1, 2, 3) for d in (-1, 0, 1)) + (4 * c + 1, 6 * c + 1)
 
 
 def boundary(ctx):
-    """Greedy reply hashes at prompt lengths around chunk ends and prefix-cache cases. Compare two targets' results."""
-    api, model = ctx["api"], ctx["model"]; rows = []
-    for n in BOUNDARY_LENGTHS:
+    """Greedy reply hashes at prompt lengths around chunk ends (opts.chunk, from the target's `chunk`, default 2048) and
+    prefix-cache cases (repeat, diverge at and off a chunk end, extend). Compare two targets' results."""
+    api, model = ctx["api"], ctx["model"]; rows = []; c = int(ctx["opts"].get("chunk", 2048))
+    for n in boundary_lengths(c):
         r = chat(api, model, [{"role": "user", "content": words(max(1, n - 4), n)}], max_tokens=24)
         rows.append([f"len{n}", r.get("prompt_tokens"), r.get("sha") or r.get("error")])
-    base = words(5000, 1).split()
-    for name, ws in (("pfx_base", base), ("pfx_div3001", base[:3001] + words(300, 11).split()), ("pfx_div2044", base[:2044] + words(300, 12).split()),
-                     ("pfx_div4092", base[:4092] + words(300, 13).split()), ("pfx_div4093", base[:4093] + words(300, 14).split()),
-                     ("pfx_base_again", base), ("pfx_extend", base + words(1500, 15).split())):
+    base = words(int(2.5 * c), 1).split()
+    for name, ws in (("pfx_base", base), (f"pfx_div{int(1.5 * c)}", base[:int(1.5 * c)] + words(300, 11).split()), (f"pfx_div{c - 4}", base[:c - 4] + words(300, 12).split()),
+                     (f"pfx_div{2 * c - 4}", base[:2 * c - 4] + words(300, 13).split()), (f"pfx_div{2 * c - 3}", base[:2 * c - 3] + words(300, 14).split()),
+                     ("pfx_base_again", base), ("pfx_extend", base + words(int(0.75 * c), 15).split())):
         r = chat(api, model, [{"role": "user", "content": " ".join(ws)}], max_tokens=24)
         rows.append([name, r.get("prompt_tokens"), r.get("sha") or r.get("error")])
     return {"ok": not any(str(x[2]).startswith(("HTTP", "URLError", "Timeout")) for x in rows), "hashes": rows}

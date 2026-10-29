@@ -1,7 +1,8 @@
 # spark-agent-kit
 
-A standard way for AI coding agents (Claude Code, Codex, Grok and others) to contribute to DGX Spark serving recipes,
-such as Mia's AI Lab's DeepSeek and GLM recipes: one contract every agent reads (`AGENTS.md`), one process with approval
+A standard way for AI coding agents (Claude Code, Codex, Grok and others) to contribute to local-inference serving
+stacks: DGX Spark recipes such as Mia's AI Lab's DeepSeek and GLM recipes first, and the same process on Apple Silicon,
+RTX workstations or anything with an OpenAI-compatible API (`docs/platforms.md`, `lab.examples/`): one contract every agent reads (`AGENTS.md`), one process with approval
 gates, and the scripts that make each stage repeatable, from checking upstream to hardware tests to PR text.
 
 **Built on what Mia's AI Lab gives its contributors.** The attribution rules in `AGENTS.md` §2 are Mia's AI Lab's
@@ -32,8 +33,9 @@ Then start your agent in the directory of the recipe you work on and tell it to 
 | `scripts/sync.sh` | 0 | latest `main`, patch numbers in use and free, open PRs and the patches they touch, collisions, matching issues |
 | `scripts/canary.py` | 1 | switches each fix back off in a scratch copy and checks a test catches it |
 | `scripts/review.sh` | 2 | builds a read-only review bundle, runs a second agent, extracts `REVIEW.md`, stops a reviewer that hangs |
-| `scripts/pairtest` | 3 | from `lab.yaml`: build on an idle box, stream the image to every Spark, run suites against a control, report, restore what was live |
-| `suites/` | 3 | `smoke`, `boundary` (chunk ends, prefix cache), `soak` (aborts, canary prompts), `cutin`, `fault` (test-only hook images) |
+| `scripts/pairtest` | 3 | from `lab.yaml`: start a target through its backend (`recipe-docker`, `command`, `service`), run suites against a control, probe the platform, report, restore what was live |
+| `suites/` | 3 | `smoke`, `boundary` (chunk ends, prefix cache, sized by the engine's chunk), `soak` (aborts, canary prompts), `cutin`, `fault` (recipe images with a test-only hook); `probes.py` per platform |
+| `docs/platforms.md`, `lab.examples/` | 3 | DGX Spark, RTX 6000 / NVIDIA workstation (vLLM, SGLang), Apple Silicon (MLX, llama.cpp): how each is declared |
 | `evals/agent26/` | model swaps | 26 agent-style prompts (tools, code, network engineering, maths, formats, Spanish, long context) with a grader and blind side-by-side |
 | `templates/` | 2, 4, 5 | PR text, review task, work claim, hand-off comment for someone else's PR |
 | `skills/claude/` | all | the Claude Code skill wrapping the process |

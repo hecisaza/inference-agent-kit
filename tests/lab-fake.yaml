@@ -1,0 +1,22 @@
+# Self-test lab: the command backend on the local machine against tests/fake_server.py (no hardware, no ssh).
+hosts:
+  here: { local: true, platform: generic }
+
+live:
+  backend: command
+  host: here
+  cwd: /tmp
+  start: "nohup python3 $KIT/tests/fake_server.py 18611 > /tmp/fake-live.log 2>&1 &"
+  stop: "pkill -f 'fake_server.py 18611' || true"
+  stop_wait_s: 1
+  api: http://127.0.0.1:18611/v1
+  model: fake-model
+
+targets:
+  a:
+    inherit: live
+    chunk: 8
+  b:
+    inherit: live
+    start: "nohup python3 $KIT/tests/fake_server.py 18611 > /tmp/fake-b.log 2>&1 &"
+    chunk: 8

@@ -39,4 +39,14 @@ cp templates/REVIEW-TASK.md "$d/b/TASK.md"
 printf '#!/bin/sh\necho thinking\necho "tokens used"\necho 1,234\necho "**SHIP.** task had $(echo "$1" | wc -l) lines"\n' > "$d/fake-reviewer"; chmod +x "$d/fake-reviewer"
 REVIEWER="$d/fake-reviewer" scripts/review.sh run "$d/b" >/dev/null 2>&1 && grep -q "SHIP.* task had [0-9]" "$d/b/REVIEW.md" && ok "review.sh runs the reviewer and extracts the answer" || bad "review.sh extract: $(cat "$d/b/review-run.raw" 2>/dev/null | head -3)"
 rm -rf "$d"
+# the command backend end to end: a local fake OpenAI server, two targets, smoke + boundary (chunk 8), restore
+export KIT=$PWD
+pkill -f 'fake_server.py 18611' 2>/dev/null; sleep 0.5
+r=$(python3 scripts/pairtest run --lab tests/lab-fake.yaml --target a --compare b --suite smoke,boundary --runs /tmp/selftest-runs 2>&1)
+rep=$(ls -dt /tmp/selftest-runs/2*/ 2>/dev/null | head -1)
+grep -q "smoke" "$rep/report.md" 2>/dev/null && grep -q "OK" "$rep/report.md" && grep -qE "a vs b.*: 19 of 19" "$rep/report.md" && ok "pairtest run (command backend, local fake server): $(grep -o 'a vs b.*' "$rep/report.md")" || bad "pairtest run: $(echo "$r" | tail -5)"
+curl -s -m 3 http://127.0.0.1:18611/v1/models | grep -q fake-model && ok "live restored after the run" || bad "live not restored"
+pkill -f 'fake_server.py 18611' 2>/dev/null; rm -rf /tmp/selftest-runs
+# every example lab parses and plans (dry)
+for f in lab.example.yaml lab.examples/*.yaml tests/lab-fake.yaml; do python3 scripts/pairtest plan --lab "$f" --dry >/dev/null 2>&1 && ok "plan --dry $f" || bad "plan --dry $f"; done
 exit $fail

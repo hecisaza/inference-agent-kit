@@ -1,0 +1,37 @@
+# A workstation with one or more RTX 6000 (Ada or Pro Blackwell) GPUs serving through vLLM as a user systemd service.
+# Two targets switch the service's settings through its EnvironmentFile and restart it; the probe records clocks,
+# temperature and memory per GPU from nvidia-smi.
+ssh_user: me
+hosts:
+  ws:
+    address: 192.0.2.50
+    platform: rtx
+
+live:
+  backend: service
+  host: ws
+  service: { kind: systemd-user, name: vllm.service }
+  env_file: ~/.config/vllm/env          # the unit's EnvironmentFile=; written before each restart
+  env: { VLLM_MODEL: "Qwen/Qwen3.8-27B-FP8", VLLM_TP: "2", VLLM_MAX_LEN: "131072" }
+  api: http://192.0.2.50:8000/v1
+  model: Qwen/Qwen3.8-27B-FP8
+
+targets:
+  tp2:
+    inherit: live
+    chunk: 8192                        # --max-num-batched-tokens: boundary prompts are cut around it
+  tp2-prefix-cache-off:
+    inherit: live
+    env: { VLLM_MODEL: "Qwen/Qwen3.8-27B-FP8", VLLM_TP: "2", VLLM_MAX_LEN: "131072", VLLM_EXTRA: "--no-enable-prefix-caching" }
+  # a second engine on the same box, started by hand instead of a service
+  sglang:
+    backend: command
+    host: ws
+    cwd: ~
+    start: "nohup python3 -m sglang.launch_server --model-path Qwen/Qwen3.8-27B-FP8 --tp 2 --port 30000 > ~/sglang.log 2>&1 &"
+    stop: "pkill -f sglang.launch_server || true"
+    api: http://192.0.2.50:30000/v1
+    model: Qwen/Qwen3.8-27B-FP8
+    chunk: 8192
+
+users: "the team's coding agents (fallback: a cloud model)"

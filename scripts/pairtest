@@ -1,21 +1,27 @@
 #!/usr/bin/env python3
-"""pairtest: stage 3 of AGENTS.md, driven by lab.yaml.
+"""pairtest: stage 3 of AGENTS.md, driven by lab.yaml. Hardware-neutral: a target names a backend (how it is started
+and stopped) and its host names a platform (how it is probed); the suites only need an OpenAI-compatible API.
 
-  pairtest plan    --lab lab.yaml --target T          what would happen; checks hosts, disk, images; changes nothing
-  pairtest build   --lab lab.yaml --target T          build T's image on build_host, then ship it
-  pairtest ship    --lab lab.yaml --target T          stream T's image from build_host to every host in one pass, compare ids
+  pairtest plan    --lab lab.yaml --target T          what would happen; checks hosts, disk, artifacts; changes nothing
+  pairtest build   --lab lab.yaml --target T          build T's artifact on build_host (backend-specific), then ship it
+  pairtest ship    --lab lab.yaml --target T          copy T's artifact to every serving host and compare (docker images)
   pairtest run     --lab lab.yaml --target T [--compare C] --suite smoke,boundary,soak,cutin,fault,bench [--opt k=v ...]
                                                       start T (and C, alternating), run the suites, write runs/<time>/report.md,
                                                       then restore what lab.yaml calls live (also on failure)
   pairtest restore --lab lab.yaml                     start the live configuration again
 
-Every remote command goes through ssh as lab.yaml's ssh_user. Nothing here pushes, posts or downloads models."""
+Backends (target.backend, default recipe-docker):
+  recipe-docker  a DGX Spark recipe: `start … restart` in recipe_dir on the head over ssh; docker image shipped to every host
+  command        any server: start/stop shell commands on a host (ssh, or local when the host is "local" / local: true)
+  service        a systemd (system or --user) or launchd service restarted on its host
+Platforms (hosts.<name>.platform, default from the backend): dgx-spark, linux-gpu, rtx, apple, generic — pick the probe.
+Nothing here pushes, posts or downloads models."""
 import argparse, datetime, json, os, shlex, subprocess, sys, time
 import yaml
 
 HERE = os.path.dirname(os.path.realpath(__file__))
 sys.path.insert(0, os.path.join(HERE, "..", "suites"))
-import basic, heavy  # noqa: E402
+import basic, heavy, probes  # noqa: E402
 from common import ready  # noqa: E402
 
 SUITES = {**basic.SUITES, **heavy.SUITES}
@@ -23,84 +29,177 @@ SUITES = {**basic.SUITES, **heavy.SUITES}
 
 def load(path):
     lab = yaml.safe_load(open(path))
-    for name, t in list(lab.get("targets", {}).items()):
+    hosts = lab.setdefault("hosts", {})
+    for name, h in list(hosts.items()):  # "name: address" shorthand -> {address: …}
+        hosts[name] = {"address": h} if isinstance(h, str) else h
+    targets = lab.setdefault("targets", {})
+    for name, t in list(targets.items()):  # inherit: another target, or "live"
         if "inherit" in t:
-            lab["targets"][name] = {**lab["targets"][t["inherit"]], **{k: v for k, v in t.items() if k != "inherit"}}
+            base = lab["live"] if t["inherit"] == "live" else targets[t["inherit"]]
+            targets[name] = {**base, **{k: v for k, v in t.items() if k != "inherit"}}
     return lab
 
 
 class Lab:
     def __init__(self, cfg, dry=False):
         self.c, self.dry = cfg, dry
-        self.user = cfg.get("ssh_user")
 
-    def addr(self, h):
-        return self.c["hosts"].get(h, h)
+    def host(self, h):
+        return self.c["hosts"].get(h, {"address": h})
 
-    def ssh(self, host, cmd, check=False, timeout=3600):
-        dest = f"{self.user}@{self.addr(host)}" if self.user else self.addr(host)
-        full = ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10", dest, "bash -lc " + shlex.quote(cmd)]
+    def is_local(self, h):
+        return h == "local" or self.host(h).get("local", False)
+
+    def platform(self, h, default="generic"):
+        return self.host(h).get("platform", default)
+
+    def sh(self, host, cmd, check=False, timeout=3600):
+        """Run cmd on host: locally for a local host, else over ssh as lab.ssh_user (or the host's user)."""
         if self.dry:
             print("[dry]", host, "$", cmd); return ""
-        p = subprocess.run(full, capture_output=True, text=True, timeout=timeout)
+        if self.is_local(host):
+            full = ["bash", "-lc", cmd]  # stdin closed and its own session below, so a daemonised server never holds our pipes
+        else:
+            h = self.host(host); user = h.get("user", self.c.get("ssh_user")); dest = f"{user}@{h['address']}" if user else h["address"]
+            full = ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10", dest, "bash -lc " + shlex.quote(cmd)]
+        p = subprocess.run(full, capture_output=True, text=True, timeout=timeout, stdin=subprocess.DEVNULL, start_new_session=True)
         if check and p.returncode:
             raise RuntimeError(f"{host}: {cmd!r} failed ({p.returncode}): {p.stderr[-400:]}")
         return p.stdout
 
+    ssh = sh  # suites call ctx["ssh"]
+
     def free_gb(self, host):
-        out = self.ssh(host, "df -BG --output=avail ~ | tail -1").strip().rstrip("G")
+        out = self.sh(host, "df -Pk ~ | tail -1 | awk '{print int($4/1048576)}'").strip()
         return int(out) if out.isdigit() else None
 
-    def image_id(self, host, image):
-        return self.ssh(host, f"docker image inspect -f '{{{{.Id}}}}' {shlex.quote(image)} 2>/dev/null").strip()[7:19]
+    def probe(self, host, target):
+        return probes.PROBES.get(self.platform(host, BACKENDS[target.get("backend", "recipe-docker")].platform), probes.generic)(lambda c: self.sh(host, c), target)
+
+
+# ---------------------------------------------------------------- backends
+class RecipeDocker:
+    """A DGX Spark recipe checkout on the head: `start … restart` starts every rank; the artifact is a docker image."""
+    platform = "dgx-spark"
+
+    def __init__(self, lab): self.lab = lab
+
+    def env(self, t):
+        return " ".join(f"{k}={shlex.quote(str(v))}" for k, v in {**t.get("env", {}), **({"IMAGE": t["image"]} if t.get("image") else {})}.items())
 
     def start(self, t, log):
-        env = " ".join(f"{k}={shlex.quote(str(v))}" for k, v in {**t.get("env", {}), **({"IMAGE": t["image"]} if t.get("image") else {})}.items())
         log(f"start {t.get('image', 'live')} on {t['head']} ({t['recipe_dir']})")
-        self.ssh(t["head"], f"cd {t['recipe_dir']} && env {env} {t['start']} restart > ~/.pairtest-start.log 2>&1", check=True)
-        if not self.dry:
-            log(f"ready after {ready(t['api'])} s")
+        self.lab.sh(t["head"], f"cd {t['recipe_dir']} && env {self.env(t)} {t['start']} restart > ~/.pairtest-start.log 2>&1", check=True)
+
+    def artifact_id(self, host, t):
+        return self.lab.sh(host, f"docker image inspect -f '{{{{.Id}}}}' {shlex.quote(t['image'])} 2>/dev/null").strip()[7:19] if t.get("image") else ""
+
+    def build(self, t):
+        b = t.get("build") or sys.exit("target has no build: section")
+        self.lab.sh(self.lab.c["build_host"], f"cd {b['recipe_checkout']} && IMAGE={shlex.quote(t['image'])} {b['command']}", check=True)
+
+    def ship(self, t):
+        lab, img, src = self.lab, t["image"], lab_build_host(self.lab)
+        dst = [h for h in lab.c["hosts"] if h != src]
+        for h in dst:
+            g = lab.free_gb(h)
+            if g is not None and g < int(lab.c.get("min_free_gb", 60)):
+                sys.exit(f"{h} has only {g} GB free (min_free_gb {lab.c.get('min_free_gb', 60)}): not shipping")
+        want = self.artifact_id(src, t) or sys.exit(f"{img} is not on {src}")
+        todo = [h for h in dst if self.artifact_id(h, t) != want]
+        if todo:
+            def u(h):
+                hh = lab.host(h); user = hh.get("user", lab.c.get("ssh_user")); return (f"{user}@" if user else "") + hh["address"]
+            loads = " ".join(f">(ssh -o BatchMode=yes {u(h)} docker load >/dev/null)" for h in todo[:-1])
+            pipe = f"ssh -o BatchMode=yes {u(src)} docker save {shlex.quote(img)} | " + (f"tee {loads} | " if loads else "") + f"ssh -o BatchMode=yes {u(todo[-1])} docker load >/dev/null"
+            print("shipping", img, "from", src, "to", ", ".join(todo))
+            if not lab.dry:
+                subprocess.run(["bash", "-c", pipe], check=True); time.sleep(5)
+        bad = [h for h in dst if self.artifact_id(h, t) != want]
+        print("image", img, want, "on all hosts" if not bad else f"MISMATCH on {bad}")
+        if bad and not lab.dry:
+            sys.exit(1)
 
 
+class Command:
+    """Any server anywhere: `start` and `stop` are shell commands run on `host` (ssh, or locally). `start` must return
+    (daemonise the server itself: nohup, setsid, a tmux session, a launcher script); readiness is the API answering."""
+    platform = "generic"
+
+    def __init__(self, lab): self.lab = lab
+
+    def start(self, t, log):
+        env = " ".join(f"{k}={shlex.quote(str(v))}" for k, v in t.get("env", {}).items())
+        if t.get("stop"):
+            log(f"stop on {t['host']}: {t['stop']}"); self.lab.sh(t["host"], t["stop"]); time.sleep(int(t.get("stop_wait_s", 3)))
+        log(f"start on {t['host']}: {t['start']}")
+        # the start command runs in its own session with no inherited descriptors, so a server it leaves running
+        # (nohup … &) cannot keep this call, or an ssh session, open
+        inner = f"cd {t.get('cwd', '~')} && env {env} {t['start']}"
+        self.lab.sh(t["host"], f"setsid bash -c {shlex.quote(inner)} > /dev/null 2>&1 < /dev/null", check=True)
+
+    def artifact_id(self, host, t):
+        return self.lab.sh(host, f"sha256sum {shlex.quote(t['artifact'])} 2>/dev/null | cut -c1-12").strip() if t.get("artifact") else ""
+
+    def build(self, t):
+        b = t.get("build") or sys.exit("target has no build: section")
+        self.lab.sh(b.get("host", self.lab.c.get("build_host", t["host"])), f"cd {b.get('cwd', '~')} && {b['command']}", check=True)
+
+    def ship(self, t):
+        print("ship: nothing to ship for a command backend (the server runs where it is started)")
+
+
+class Service:
+    """A systemd (system or --user) or launchd service on `host`; restarted, then the API is awaited."""
+    platform = "generic"
+
+    def __init__(self, lab): self.lab = lab
+
+    def start(self, t, log):
+        s = t["service"]; kind, name = s.get("kind", "systemd-user"), s["name"]
+        cmd = {"systemd-user": f"systemctl --user restart {shlex.quote(name)}", "systemd": f"sudo -n systemctl restart {shlex.quote(name)}",
+               "launchd": f"launchctl kickstart -k gui/$(id -u)/{shlex.quote(name)}"}[kind]
+        if t.get("env_file"):  # settings the service reads at start (e.g. an EnvironmentFile): written before the restart
+            body = "\n".join(f"{k}={v}" for k, v in t.get("env", {}).items())
+            self.lab.sh(t["host"], f"printf %s {shlex.quote(body + chr(10))} > {shlex.quote(t['env_file'])}", check=True)
+        log(f"restart {kind} {name} on {t['host']}"); self.lab.sh(t["host"], cmd, check=True)
+
+    def artifact_id(self, host, t): return ""
+    def build(self, t): sys.exit("build is not defined for a service backend")
+    def ship(self, t): print("ship: nothing to ship for a service backend")
+
+
+BACKENDS = {"recipe-docker": RecipeDocker, "command": Command, "service": Service}
+
+
+def lab_build_host(lab):
+    return lab.c.get("build_host") or sys.exit("lab.yaml has no build_host")
+
+
+def backend(lab, t):
+    name = t.get("backend", "recipe-docker")
+    return BACKENDS.get(name, None)(lab) if name in BACKENDS else sys.exit(f"unknown backend {name!r}; have {sorted(BACKENDS)}")
+
+
+def start(lab, t, log):
+    backend(lab, t).start(t, log)
+    if not lab.dry:
+        log(f"ready after {ready(t['api'])} s")
+
+
+# ---------------------------------------------------------------- commands
 def cmd_plan(lab, a):
     t = lab.c["targets"][a.target] if a.target else None
-    print("fabric:", lab.c.get("fabric"), "| build host:", lab.c.get("build_host"), "| live:", lab.c["live"].get("model"))
+    print("fabric:", lab.c.get("fabric", "-"), "| build host:", lab.c.get("build_host", "-"), "| live:", lab.c.get("live", {}).get("model"))
     print("users of the live model:", lab.c.get("users", "(not set)"))
-    for h in lab.c["hosts"]:
-        img = lab.image_id(h, t["image"]) if t and t.get("image") else ""
-        print(f"  {h:10} {lab.addr(h):16} free {lab.free_gb(h)} GB  {('image ' + t['image'] + ': ' + (img or 'MISSING')) if img is not None and t else ''}")
+    be = backend(lab, t) if t else None
+    for h, hh in lab.c["hosts"].items():
+        art = be.artifact_id(h, t) if be else ""
+        print(f"  {h:10} {hh.get('address', 'local'):16} {lab.platform(h, be.platform if be else 'generic'):9} free {lab.free_gb(h)} GB"
+              + (f"  artifact: {art or 'MISSING'}" if t and (t.get('image') or t.get('artifact')) else ""))
     if t:
         print("target:", json.dumps({k: v for k, v in t.items() if k != "fault"}, indent=1))
-
-
-def cmd_ship(lab, a):
-    t = lab.c["targets"][a.target]; img = t["image"]; src = lab.c["build_host"]
-    dst = [h for h in lab.c["hosts"] if h != src]
-    for h in dst:
-        g = lab.free_gb(h)
-        if g is not None and g < int(lab.c.get("min_free_gb", 60)):
-            sys.exit(f"{h} has only {g} GB free (min_free_gb {lab.c.get('min_free_gb', 60)}): not shipping")
-    want = lab.image_id(src, img)
-    if not want:
-        sys.exit(f"{img} is not on {src}")
-    todo = [h for h in dst if lab.image_id(h, img) != want]
-    if todo:
-        u = lambda h: (f"{lab.user}@" if lab.user else "") + lab.addr(h)  # noqa: E731
-        loads = " ".join(f">(ssh -o BatchMode=yes {u(h)} docker load >/dev/null)" for h in todo[:-1])
-        pipe = f"ssh -o BatchMode=yes {u(src)} docker save {shlex.quote(img)} | " + (f"tee {loads} | " if loads else "") + f"ssh -o BatchMode=yes {u(todo[-1])} docker load >/dev/null"
-        print("shipping", img, "from", src, "to", ", ".join(todo))
-        if not lab.dry:
-            subprocess.run(["bash", "-c", pipe], check=True); time.sleep(5)
-    bad = [h for h in dst if lab.image_id(h, img) != want]
-    print("image", img, want, "on all hosts" if not bad else f"MISMATCH on {bad}")
-    if bad and not lab.dry:
-        sys.exit(1)
-
-
-def cmd_build(lab, a):
-    t = lab.c["targets"][a.target]; b = t.get("build") or sys.exit("target has no build: section")
-    lab.ssh(lab.c["build_host"], f"cd {b['recipe_checkout']} && IMAGE={shlex.quote(t['image'])} {b['command']}", check=True)
-    cmd_ship(lab, a)
+        print("probe:", json.dumps(lab.probe(t.get("head", t.get("host", "local")), t)) if not lab.dry else "(dry)")
 
 
 def cmd_run(lab, a):
@@ -119,21 +218,26 @@ def cmd_run(lab, a):
     try:
         for rep in range(int(opts.get("reps", 1))):
             for name in (names if rep % 2 == 0 else names[::-1]):  # alternate A,B then B,A
-                t = lab.c["targets"][name]; lab.start(t, log)
+                t = lab.c["targets"][name]; start(lab, t, log)
+                head = t.get("head", t.get("host", "local"))
                 for s in suites:
-                    ctx = {"api": t["api"], "model": t["model"], "out": run, "opts": opts, "log": log, "target": t, "head": t["head"],
-                           "hosts": list(lab.c["hosts"]), "ssh": lab.ssh, "restart": lambda t=t: lab.start(t, log),
-                           "sample": (lambda: {h: lab.ssh(h, "docker stats --no-stream --format '{{.Name}} {{.PIDs}} {{.MemUsage}}' | head -3").strip() for h in lab.c["hosts"]})}
+                    ctx = {"api": t["api"], "model": t["model"], "out": run, "opts": {**{"chunk": t.get("chunk", 2048)}, **opts}, "log": log,
+                           "target": t, "head": head, "hosts": list(lab.c["hosts"]), "ssh": lab.sh, "platform": lab.platform(head),
+                           "restart": lambda t=t: start(lab, t, log), "sample": lambda t=t, h=head: {h: lab.probe(h, t)}}
                     log(f"== {name} rep {rep} suite {s}")
-                    if s == "bench":
+                    if s == "fault" and t.get("backend", "recipe-docker") != "recipe-docker":
+                        r = {"ok": False, "skipped": "fault suite needs the recipe-docker backend (container exit status)"}
+                    elif s == "bench":
                         cmd = (t.get("bench_cmd") or "").format(api=t["api"], model=t["model"], label=f"{name}-{rep}", out=run)
                         r = {"ok": False, "skipped": "no bench_cmd"} if not cmd else {"ok": subprocess.run(cmd, shell=True).returncode == 0, "cmd": cmd}
                     else:
                         r = SUITES[s](ctx)
+                    r["probe"] = lab.probe(head, t) if not lab.dry else {}
                     results.setdefault(s, {}).setdefault(name, []).append(r)
                     json.dump(results, open(os.path.join(run, "results.json"), "w"), indent=1)
     finally:
-        log("restore live"); lab.start(lab.c["live"], log)
+        if lab.c.get("live"):
+            log("restore live"); start(lab, lab.c["live"], log)
     write_report(run, names, suites, results); log(f"report: {run}/report.md")
 
 
@@ -143,11 +247,11 @@ def write_report(run, names, suites, results):
         L += [f"## {s}", ""]
         for n in names:
             for i, r in enumerate(results.get(s, {}).get(n, [])):
-                L.append(f"- **{n}** rep {i}: {'OK' if r.get('ok') else 'NOT OK'} " + json.dumps({k: v for k, v in r.items() if k not in ('hashes', 'samples')})[:600])
+                L.append(f"- **{n}** rep {i}: {'OK' if r.get('ok') else 'NOT OK'} " + json.dumps({k: v for k, v in r.items() if k not in ('hashes', 'samples')})[:700])
         if s == "boundary" and len(names) == 2 and all(results.get(s, {}).get(n) for n in names):
             a, b = (results[s][n][0]["hashes"] for n in names)
             same = sum(x[2] == y[2] for x, y in zip(a, b))
-            L.append(f"- **{names[0]} vs {names[1]}**: {same} of {len(a)} reply hashes identical")
+            L.append(f"- **{names[0]} vs {names[1]}**: {same} of {len(a)} reply hashes identical" + ("" if same == len(a) else f"; differ: {[x[0] for x, y in zip(a, b) if x[2] != y[2]]}"))
         L.append("")
     open(os.path.join(run, "report.md"), "w").write("\n".join(L))
 
@@ -163,7 +267,11 @@ def main():
     lab = Lab(load(a.lab), dry=a.dry)
     if a.cmd in ("build", "ship", "run") and not a.target:
         sys.exit("--target is required")
-    {"plan": cmd_plan, "build": cmd_build, "ship": cmd_ship, "run": cmd_run, "restore": lambda l, a: l.start(l.c["live"], print)}[a.cmd](lab, a)
+    if a.cmd == "plan": cmd_plan(lab, a)
+    elif a.cmd == "build": t = lab.c["targets"][a.target]; backend(lab, t).build(t); backend(lab, t).ship(t)
+    elif a.cmd == "ship": t = lab.c["targets"][a.target]; backend(lab, t).ship(t)
+    elif a.cmd == "run": cmd_run(lab, a)
+    else: start(lab, lab.c["live"], print)
 
 
 if __name__ == "__main__":
