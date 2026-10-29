@@ -1,0 +1,17 @@
+# owner.yaml: the person this agent works for (copy to owner.yaml; not committed)
+name: "Your Name"
+github: your-handle
+git_email: "12345678+your-handle@users.noreply.github.com"   # the address GitHub shows on your commits
+timezone: America/New_York        # report times in this zone
+
+# Agent attribution on commits and PR text: none | trailer | footer
+agent_attribution: none
+
+# Who approves what. Anything public always needs the owner.
+approvals:
+  public_actions: owner           # push, PR, comment, fork, post
+  downtime: owner                 # stopping or swapping a served model
+  spending: owner                 # paid APIs, cloud
+notify:
+  # where long runs report when they finish (optional)
+  channel: none

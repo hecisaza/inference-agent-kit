@@ -1,0 +1,170 @@
+#!/usr/bin/env python3
+"""pairtest: stage 3 of AGENTS.md, driven by lab.yaml.
+
+  pairtest plan    --lab lab.yaml --target T          what would happen; checks hosts, disk, images; changes nothing
+  pairtest build   --lab lab.yaml --target T          build T's image on build_host, then ship it
+  pairtest ship    --lab lab.yaml --target T          stream T's image from build_host to every host in one pass, compare ids
+  pairtest run     --lab lab.yaml --target T [--compare C] --suite smoke,boundary,soak,cutin,fault,bench [--opt k=v ...]
+                                                      start T (and C, alternating), run the suites, write runs/<time>/report.md,
+                                                      then restore what lab.yaml calls live (also on failure)
+  pairtest restore --lab lab.yaml                     start the live configuration again
+
+Every remote command goes through ssh as lab.yaml's ssh_user. Nothing here pushes, posts or downloads models."""
+import argparse, datetime, json, os, shlex, subprocess, sys, time
+import yaml
+
+HERE = os.path.dirname(os.path.realpath(__file__))
+sys.path.insert(0, os.path.join(HERE, "..", "suites"))
+import basic, heavy  # noqa: E402
+from common import ready  # noqa: E402
+
+SUITES = {**basic.SUITES, **heavy.SUITES}
+
+
+def load(path):
+    lab = yaml.safe_load(open(path))
+    for name, t in list(lab.get("targets", {}).items()):
+        if "inherit" in t:
+            lab["targets"][name] = {**lab["targets"][t["inherit"]], **{k: v for k, v in t.items() if k != "inherit"}}
+    return lab
+
+
+class Lab:
+    def __init__(self, cfg, dry=False):
+        self.c, self.dry = cfg, dry
+        self.user = cfg.get("ssh_user")
+
+    def addr(self, h):
+        return self.c["hosts"].get(h, h)
+
+    def ssh(self, host, cmd, check=False, timeout=3600):
+        dest = f"{self.user}@{self.addr(host)}" if self.user else self.addr(host)
+        full = ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10", dest, "bash -lc " + shlex.quote(cmd)]
+        if self.dry:
+            print("[dry]", host, "$", cmd); return ""
+        p = subprocess.run(full, capture_output=True, text=True, timeout=timeout)
+        if check and p.returncode:
+            raise RuntimeError(f"{host}: {cmd!r} failed ({p.returncode}): {p.stderr[-400:]}")
+        return p.stdout
+
+    def free_gb(self, host):
+        out = self.ssh(host, "df -BG --output=avail ~ | tail -1").strip().rstrip("G")
+        return int(out) if out.isdigit() else None
+
+    def image_id(self, host, image):
+        return self.ssh(host, f"docker image inspect -f '{{{{.Id}}}}' {shlex.quote(image)} 2>/dev/null").strip()[7:19]
+
+    def start(self, t, log):
+        env = " ".join(f"{k}={shlex.quote(str(v))}" for k, v in {**t.get("env", {}), **({"IMAGE": t["image"]} if t.get("image") else {})}.items())
+        log(f"start {t.get('image', 'live')} on {t['head']} ({t['recipe_dir']})")
+        self.ssh(t["head"], f"cd {t['recipe_dir']} && env {env} {t['start']} restart > ~/.pairtest-start.log 2>&1", check=True)
+        if not self.dry:
+            log(f"ready after {ready(t['api'])} s")
+
+
+def cmd_plan(lab, a):
+    t = lab.c["targets"][a.target] if a.target else None
+    print("fabric:", lab.c.get("fabric"), "| build host:", lab.c.get("build_host"), "| live:", lab.c["live"].get("model"))
+    print("users of the live model:", lab.c.get("users", "(not set)"))
+    for h in lab.c["hosts"]:
+        img = lab.image_id(h, t["image"]) if t and t.get("image") else ""
+        print(f"  {h:10} {lab.addr(h):16} free {lab.free_gb(h)} GB  {('image ' + t['image'] + ': ' + (img or 'MISSING')) if img is not None and t else ''}")
+    if t:
+        print("target:", json.dumps({k: v for k, v in t.items() if k != "fault"}, indent=1))
+
+
+def cmd_ship(lab, a):
+    t = lab.c["targets"][a.target]; img = t["image"]; src = lab.c["build_host"]
+    dst = [h for h in lab.c["hosts"] if h != src]
+    for h in dst:
+        g = lab.free_gb(h)
+        if g is not None and g < int(lab.c.get("min_free_gb", 60)):
+            sys.exit(f"{h} has only {g} GB free (min_free_gb {lab.c.get('min_free_gb', 60)}): not shipping")
+    want = lab.image_id(src, img)
+    if not want:
+        sys.exit(f"{img} is not on {src}")
+    todo = [h for h in dst if lab.image_id(h, img) != want]
+    if todo:
+        u = lambda h: (f"{lab.user}@" if lab.user else "") + lab.addr(h)  # noqa: E731
+        loads = " ".join(f">(ssh -o BatchMode=yes {u(h)} docker load >/dev/null)" for h in todo[:-1])
+        pipe = f"ssh -o BatchMode=yes {u(src)} docker save {shlex.quote(img)} | " + (f"tee {loads} | " if loads else "") + f"ssh -o BatchMode=yes {u(todo[-1])} docker load >/dev/null"
+        print("shipping", img, "from", src, "to", ", ".join(todo))
+        if not lab.dry:
+            subprocess.run(["bash", "-c", pipe], check=True); time.sleep(5)
+    bad = [h for h in dst if lab.image_id(h, img) != want]
+    print("image", img, want, "on all hosts" if not bad else f"MISMATCH on {bad}")
+    if bad and not lab.dry:
+        sys.exit(1)
+
+
+def cmd_build(lab, a):
+    t = lab.c["targets"][a.target]; b = t.get("build") or sys.exit("target has no build: section")
+    lab.ssh(lab.c["build_host"], f"cd {b['recipe_checkout']} && IMAGE={shlex.quote(t['image'])} {b['command']}", check=True)
+    cmd_ship(lab, a)
+
+
+def cmd_run(lab, a):
+    names = [a.target] + ([a.compare] if a.compare else [])
+    suites = [s for s in a.suite.split(",") if s]
+    unknown = [s for s in suites if s not in SUITES and s != "bench"]
+    if unknown:
+        sys.exit(f"unknown suites {unknown}; have {sorted(SUITES) + ['bench']}")
+    opts = dict(kv.split("=", 1) for kv in a.opt)
+    run = os.path.join(a.runs, datetime.datetime.now().strftime("%Y%m%dT%H%M%S"))
+    os.makedirs(run, exist_ok=True)
+    logf = open(os.path.join(run, "log.txt"), "a")
+    def log(m):  # noqa: E306
+        line = f"{datetime.datetime.now():%H:%M:%S} {m}"; print(line, flush=True); logf.write(line + "\n"); logf.flush()
+    results = {}
+    try:
+        for rep in range(int(opts.get("reps", 1))):
+            for name in (names if rep % 2 == 0 else names[::-1]):  # alternate A,B then B,A
+                t = lab.c["targets"][name]; lab.start(t, log)
+                for s in suites:
+                    ctx = {"api": t["api"], "model": t["model"], "out": run, "opts": opts, "log": log, "target": t, "head": t["head"],
+                           "hosts": list(lab.c["hosts"]), "ssh": lab.ssh, "restart": lambda t=t: lab.start(t, log),
+                           "sample": (lambda: {h: lab.ssh(h, "docker stats --no-stream --format '{{.Name}} {{.PIDs}} {{.MemUsage}}' | head -3").strip() for h in lab.c["hosts"]})}
+                    log(f"== {name} rep {rep} suite {s}")
+                    if s == "bench":
+                        cmd = (t.get("bench_cmd") or "").format(api=t["api"], model=t["model"], label=f"{name}-{rep}", out=run)
+                        r = {"ok": False, "skipped": "no bench_cmd"} if not cmd else {"ok": subprocess.run(cmd, shell=True).returncode == 0, "cmd": cmd}
+                    else:
+                        r = SUITES[s](ctx)
+                    results.setdefault(s, {}).setdefault(name, []).append(r)
+                    json.dump(results, open(os.path.join(run, "results.json"), "w"), indent=1)
+    finally:
+        log("restore live"); lab.start(lab.c["live"], log)
+    write_report(run, names, suites, results); log(f"report: {run}/report.md")
+
+
+def write_report(run, names, suites, results):
+    L = [f"# pairtest {os.path.basename(run)}", "", f"targets: {', '.join(names)}  |  suites: {', '.join(suites)}", ""]
+    for s in suites:
+        L += [f"## {s}", ""]
+        for n in names:
+            for i, r in enumerate(results.get(s, {}).get(n, [])):
+                L.append(f"- **{n}** rep {i}: {'OK' if r.get('ok') else 'NOT OK'} " + json.dumps({k: v for k, v in r.items() if k not in ('hashes', 'samples')})[:600])
+        if s == "boundary" and len(names) == 2 and all(results.get(s, {}).get(n) for n in names):
+            a, b = (results[s][n][0]["hashes"] for n in names)
+            same = sum(x[2] == y[2] for x, y in zip(a, b))
+            L.append(f"- **{names[0]} vs {names[1]}**: {same} of {len(a)} reply hashes identical")
+        L.append("")
+    open(os.path.join(run, "report.md"), "w").write("\n".join(L))
+
+
+def main():
+    ap = argparse.ArgumentParser(usage=__doc__)
+    ap.add_argument("cmd", choices=["plan", "build", "ship", "run", "restore"])
+    ap.add_argument("--lab", default="lab.yaml")
+    ap.add_argument("--target"); ap.add_argument("--compare")
+    ap.add_argument("--suite", default="smoke"); ap.add_argument("--opt", action="append", default=[])
+    ap.add_argument("--runs", default="runs"); ap.add_argument("--dry", action="store_true", help="print remote commands instead of running them")
+    a = ap.parse_args()
+    lab = Lab(load(a.lab), dry=a.dry)
+    if a.cmd in ("build", "ship", "run") and not a.target:
+        sys.exit("--target is required")
+    {"plan": cmd_plan, "build": cmd_build, "ship": cmd_ship, "run": cmd_run, "restore": lambda l, a: l.start(l.c["live"], print)}[a.cmd](lab, a)
+
+
+if __name__ == "__main__":
+    main()

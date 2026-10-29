@@ -1,0 +1,42 @@
+# lab.yaml: your Sparks (copy to lab.yaml; not committed). Every script reads this; nothing about your lab is in the kit.
+ssh_user: me
+
+hosts:                       # name: address you can ssh to from the machine running the agent
+  spark1: 192.0.2.11
+  spark2: 192.0.2.12
+  spark3: 192.0.2.13
+  spark4: 192.0.2.14
+
+fabric: ring                 # ring (switchless) | switch
+build_host: spark2           # a box that is NOT serving while you build (a build can starve a served model)
+host_tests_host: spark1      # where CPU host tests run (needs docker and the recipe's build image)
+
+# What runs on the Sparks when you are done ("restore" puts this back)
+live:
+  recipe_dir: ~/recipe-dsv41-4x          # on the head
+  head: spark1
+  start: "./start-switchless.sh"         # command run in recipe_dir
+  env: { PREPARE: "0", HF_HUB_OFFLINE: "1" }
+  api: http://192.0.2.11:8888/v1
+  model: DeepSeek-V4.1-Flash-1017
+
+# Targets you test: an image and the env to start it with
+targets:
+  candidate:
+    recipe_dir: ~/recipe-dsv41-4x
+    head: spark1
+    start: "./start-switchless.sh"
+    image: tensorfold-dsv41:candidate
+    env: { PREPARE: "0", HF_HUB_OFFLINE: "1", TF_DS_ENGRAM_LEAD: "1" }
+    api: http://192.0.2.11:8888/v1
+    model: DeepSeek-V4.1-Flash-1017
+    build:                               # how to build the image on build_host (optional)
+      recipe_checkout: ~/recipe-dsv41-4x-build
+      command: "./scripts/build-image.sh"
+  control:
+    inherit: candidate
+    image: tensorfold-dsv41:control
+
+# Who uses the live model (said in every downtime request)
+users: "OpenClaw agents (fallback: cloud model), Nashira"
+min_free_gb: 60                          # refuse to ship an image onto a box with less free disk
