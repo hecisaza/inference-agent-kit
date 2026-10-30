@@ -26,7 +26,7 @@ class H(BaseHTTPRequestHandler):
         n = int(self.headers.get("Content-Length", 0)); req = json.loads(self.rfile.read(n) or b"{}")
         text = next((m["content"] for m in reversed(req.get("messages", [])) if m.get("role") == "user"), "")
         text = text if isinstance(text, str) else json.dumps(text)
-        out = reply(text); ptoks = max(1, len(text.split())); usage = {"prompt_tokens": ptoks, "completion_tokens": len(out.split()), "total_tokens": ptoks + 1}
+        out = '{"city": "Lima", "temp_c": 19}' if (req.get("response_format") or {}).get("type") == "json_object" else reply(text); ptoks = max(1, len(text.split())); usage = {"prompt_tokens": ptoks, "completion_tokens": len(out.split()), "total_tokens": ptoks + 1}
         if req.get("stream"):
             self.send_response(200); self.send_header("Content-Type", "text/event-stream"); self.end_headers()
             for w in out.split(" "):

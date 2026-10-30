@@ -1,21 +1,36 @@
 """smoke, boundary, cutin and repro suites. Each run(ctx) returns a dict that pairtest writes to the report.
 
 ctx: dict(api, model, out (run directory), opts (suite options from the command line), log (callable))."""
-import subprocess, threading, time
+import json, subprocess, threading, time
 from common import chat, words
 
 
 def smoke(ctx):
-    """Three quick checks: an arithmetic answer, the same greedy request twice (must match), and streaming works."""
+    """Four quick checks: an arithmetic answer, the same greedy request twice (must match), streaming works, and JSON mode gives a JSON object."""
     api, model = ctx["api"], ctx["model"]
     a = chat(api, model, [{"role": "user", "content": "What is 17*23? Reply with the number only."}], max_tokens=16)
     q = [{"role": "user", "content": "Name three colours. One line."}]
     b1, b2 = chat(api, model, q, max_tokens=24), chat(api, model, q, max_tokens=24)
     s = chat(api, model, q, max_tokens=24, stream=True)
-    errs = [r["error"] for r in (a, b1, b2, s) if r.get("error")]
+    # JSON mode: the reply to a response_format json_object request parses as a JSON object. A server that rejects
+    # response_format (HTTP 4xx) is recorded as "unsupported", not as a failure: not every backend has it.
+    j = chat(api, model, [{"role": "user", "content": "Give the weather for one city as a JSON object with keys city and temp_c. JSON only."}],
+             max_tokens=60, extra={"response_format": {"type": "json_object"}})
+    json_mode = "unsupported" if j.get("error", "").startswith("HTTP 4") else _is_json_object(j.get("content", ""))
+    errs = [r["error"] for r in (a, b1, b2, s) if r.get("error")] + ([j["error"]] if j.get("error") and json_mode != "unsupported" else [])
     checks = {"arithmetic": "391" in a.get("content", ""), "greedy_repeat_equal": not errs and b1.get("sha") == b2.get("sha"),
-              "stream_matches": not errs and s.get("content") == b1.get("content")}
-    return {"ok": all(checks.values()) and not errs, "checks": checks, "ttft_stream_s": s.get("ttft"), "errors": errs}
+              "stream_matches": not errs and s.get("content") == b1.get("content"), "json_mode": json_mode}
+    return {"ok": all(v is True or v == "unsupported" for v in checks.values()) and not errs, "checks": checks, "ttft_stream_s": s.get("ttft"), "errors": errs}
+
+
+def _is_json_object(text):
+    t = text.strip()
+    if t.startswith("```"):
+        t = t.strip("`").split("\n", 1)[-1].rsplit("```", 1)[0].strip()
+    try:
+        return isinstance(json.loads(t), dict)
+    except ValueError:
+        return False
 
 
 def boundary_lengths(chunk):

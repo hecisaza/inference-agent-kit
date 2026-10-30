@@ -13,7 +13,7 @@ complete."""
 import argparse, html, json, os, re, statistics
 
 ALL_SUITES = ("smoke", "boundary", "cutin", "soak", "fault", "repro", "bench")
-NOT_SHOWN = {"smoke": "basic answers, greedy repeat equality and streaming", "boundary": "reply equality at chunk ends and prefix-cache cases",
+NOT_SHOWN = {"smoke": "basic answers, greedy repeat equality, streaming and JSON mode", "boundary": "reply equality at chunk ends and prefix-cache cases",
              "cutin": "a short request's first-token time behind a cold long prompt", "soak": "errors, canary mismatches and resource growth over time with client aborts",
              "fault": "a clean pair exit and recovery after an injected read fault", "bench": "throughput and latency against a control",
              "repro": "whether the issue's reproduction command shows the problem on the control and not on the candidate"}
@@ -87,10 +87,11 @@ def main():
     for s in [s for s in ALL_SUITES if s in R]:
         md.append(f"#### {s}\n")
         if s == "smoke":
-            md.append("| target | rep | arithmetic | greedy repeat equal | stream matches | first token (stream) | errors |\n|---|---|---|---|---|---|---|")
+            md.append("| target | rep | arithmetic | greedy repeat equal | stream matches | JSON mode | first token (stream) | errors |\n|---|---|---|---|---|---|---|---|")
             for n in names:
                 for i, r in enumerate(R[s].get(n, [])):
-                    c = r.get("checks", {}); md.append(f"| `{cell(n)}` | {i} | {tick(c.get('arithmetic'))} | {tick(c.get('greedy_repeat_equal'))} | {tick(c.get('stream_matches'))} | {r.get('ttft_stream_s', '-')} s | {cell(r.get('errors') or '-')} |")
+                    c = r.get("checks", {}); jm = c.get("json_mode"); jm = "n/a" if jm == "unsupported" else ("not checked" if jm is None else tick(jm))
+                    md.append(f"| `{cell(n)}` | {i} | {tick(c.get('arithmetic'))} | {tick(c.get('greedy_repeat_equal'))} | {tick(c.get('stream_matches'))} | {jm} | {r.get('ttft_stream_s', '-')} s | {cell(r.get('errors') or '-')} |")
         elif s == "boundary":
             reps = {n: R[s].get(n, []) for n in names}
             if cand in reps and ctrl in reps and reps[cand] and reps[ctrl]:
