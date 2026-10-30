@@ -76,4 +76,4 @@ Nothing about your lab is in the kit: `lab.yaml` and `owner.yaml` stay local (`.
 
 ## License
 
-Apache-2.0 (the same as Mia's AI Lab recipes), unless the owner of this repository chooses otherwise.
+Apache-2.0 (the same as Mia's AI Lab recipes); see `LICENSE`.
