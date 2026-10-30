@@ -14,7 +14,7 @@ The agent-contract layout follows [gb10-clock-cap](https://github.com/agjs/gb10-
 
 ## Quick start
 
-    git clone <this repo> ~/spark-agent-kit && cd ~/spark-agent-kit
+    git clone https://github.com/hecisaza/spark-agent-kit ~/spark-agent-kit && cd ~/spark-agent-kit
     cp owner.example.yaml owner.yaml   # your name, commit email, time zone, attribution policy
     cp lab.example.yaml lab.yaml       # your Sparks: hosts, fabric, build box, what is live, targets
     scripts/install-skill.sh           # optional: the Claude Code skill
