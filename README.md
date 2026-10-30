@@ -37,6 +37,7 @@ Then start your agent in the directory of the recipe you work on and tell it to 
 | `scripts/report.py` | 3, 4 | visual documentation of a run for reviewers: `report.md` for the PR (tables, SVG charts), `report.html` to share, the "what this does not show" list |
 | `suites/` | 3 | `smoke`, `boundary` (chunk ends, prefix cache, sized by the engine's chunk), `soak` (aborts, canary prompts), `cutin`, `fault` (recipe images with a test-only hook), `repro` (an issue's reproduction script: must show the problem on the base and not on the fix); `probes.py` per platform |
 | `scripts/issue-agent.sh`, `templates/ISSUE-TASK.md` | issue | an agent reproduces an issue on the live build and fixes it on a branch; the script confirms the reproduction, opens the PR for the pipeline, or posts what was tried |
+| `scripts/evidence-review.sh`, `templates/EVIDENCE-REVIEW-TASK.md` | 3, 4 | a second opinion on a run from a different model, read-only: recomputes the report from the raw results, checks which changed paths the suites exercised, grades each claim of the PR |
 | `docs/pipeline.md` | all | the GitHub Actions pipeline: any PR tested against its base on the lab, an issue worked by the agent, what is automatic and what needs a person |
 | `docs/platforms.md`, `lab.examples/` | 3 | DGX Spark, RTX 6000 / NVIDIA workstation (vLLM, SGLang), Apple Silicon (MLX, llama.cpp): how each is declared |
 | `evals/agent26/` | model swaps | 26 agent-style prompts (tools, code, network engineering, maths, formats, Spanish, long context) with a grader and blind side-by-side |

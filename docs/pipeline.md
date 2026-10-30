@@ -30,6 +30,7 @@ workflows live in the fork's default branch (`.github/workflows/spark-test.yml` 
 | reproduce, fix, write `REPRO.md`, `tests/repro-issue-N.sh`, `PR.md` | the agent, in a checkout, with no token | the task template (`templates/ISSUE-TASK.md`) and `AGENTS.md` |
 | confirm the reproduction on the live build, push the branch, open the PR on the fork, label it | `scripts/issue-agent.sh` | the agent's script must exit non-zero against live; otherwise the verdict becomes `unclear` and no PR is opened |
 | test that PR against its base | spark-test, in the same run | the repro suite: the script must show the problem on the base and not on the PR, or the run fails |
+| second opinion on the evidence | `scripts/evidence-review.sh`: a different model (Codex by default), read-only, gets the PR diff, the report, the raw results and the suites' source; recomputes the report, says which changed paths the suites exercised, grades each claim | advisory: its verdict is appended to the comment and kept with the evidence; a missing reviewer is reported, never hidden |
 | merge, or carry the fix upstream | a person | review of the evidence; the owner's go |
 
 The agent's trust boundary is the runner host: it works as the runner's user with the runner's SSH keys, under the rules
@@ -40,8 +41,10 @@ sandbox. Give it issues you would give a new contributor with the same access.
 
 - `docs/evidence/<run>/report.md`, `report.html` and the charts, committed to the PR branch (a PR of the fork) or to
   `evidence/<owner>-<repo>-pr-<n>` on the fork (a PR elsewhere), and the same files as a run artifact.
-- A comment on the PR of the fork with the first 200 lines of the report; for a PR elsewhere, the same text in the run
-  summary, ready to paste once the owner says so.
+- A comment on the PR of the fork with the first 200 lines of the report and the second opinion; for a PR elsewhere,
+  the same text in the run summary, ready to paste once the owner says so.
+- `REVIEW.md`: the second opinion (verdict line: EVIDENCE SUPPORTS THE CLAIM / NO REGRESSION SHOWN, CLAIM NOT TESTED /
+  EVIDENCE CONTRADICTS THE CLAIM / EVIDENCE UNRELIABLE), or `review-missing.txt` with the reason there is none.
 - For an issue: the agent's `REPRO.md`, `PR.md`, the task and the logs as a run artifact; a PR with `Closes #n` when the
   issue is on the fork, or `Issue: <url>` when it is elsewhere.
 
@@ -59,7 +62,10 @@ sandbox. Give it issues you would give a new contributor with the same access.
    keeps a single pending run and cancels every other one that arrives while a run is in progress.
 4. The two workflow files on the fork's default branch, with the author allowlist, the lab addresses and the live model
    edited for the lab. `pull_request_target` reads the workflow from the default branch, so changes to it go there.
-5. For the issue workflow, the agent command on the runner host: the default is Claude Code headless
+5. The second opinion needs a reviewer on the runner host: Codex (`codex exec`) logged in as the runner's user, or
+   `REVIEWER` set in the workflow to another read-only agent command. Use a different model than the one that writes
+   the code; the point is an independent reading of the same evidence.
+6. For the issue workflow, the agent command on the runner host: the default is Claude Code headless
    (`claude -p --permission-mode acceptEdits --allowedTools ...`); set `AGENT_CMD` in the workflow for another agent.
    The kit's `scripts/install-skill.sh` gives Claude Code the process skill.
 
@@ -67,8 +73,9 @@ sandbox. Give it issues you would give a new contributor with the same access.
 
 ```
 scripts/pairtest build --lab lab.run.yaml --target base && scripts/pairtest build --lab lab.run.yaml --target pr
-scripts/pairtest run --lab lab.run.yaml --target pr --compare base --suite smoke,boundary,cutin,soak \
+scripts/pairtest run --lab lab.run.yaml --target pr --compare base --suite smoke,boundary,cutin,soak --opt reps=2 \
     --opt "repro_cmd=bash tests/repro-issue-12.sh {api} {model}"      # the repro suite, when the PR fixes an issue
+scripts/evidence-review.sh runs/<run> --checkout . --base <base sha> --head <head sha> --pr-url <url>   # the second opinion
 LIVE_API=http://head:8888/v1 LIVE_MODEL=<model> scripts/issue-agent.sh https://github.com/<owner>/<repo>/issues/12 --repo <fork>
 ```
 

@@ -82,6 +82,16 @@ rep=$(ls -dt /tmp/selftest-runs/2*/ 2>/dev/null | head -1)
 r=$(python3 scripts/pairtest run --lab tests/lab-fake.yaml --target bad --compare a --suite repro --opt "repro_cmd=bash tests/fake-repro.sh {api} {model}" --runs /tmp/selftest-runs 2>&1); rc=$?
 rep=$(ls -dt /tmp/selftest-runs/2*/ 2>/dev/null | head -1)
 [ "$rc" = 1 ] && echo "$r" | grep -q "NOT OK: bad/repro" && grep -q "Not reproduced on the control" "$rep/report.md" && ok "repro suite: the inverse (candidate shows it, control does not) fails the run and says the control did not reproduce" || bad "repro suite inverse: rc=$rc"
+# evidence-review.sh: bundle (diff, report, results, suites, run facts) + a fake reviewer -> REVIEW.md next to the run
+er=$(mktemp -d); git init -q "$er/co"; echo a > "$er/co/f"; git -C "$er/co" add f; git -C "$er/co" -c user.name=t -c user.email=t@example.com commit -q -m base
+echo b > "$er/co/f"; git -C "$er/co" -c user.name=t -c user.email=t@example.com commit -q -am head
+printf '#!/bin/sh\necho "tokens used"\necho 1\necho "**NO REGRESSION SHOWN, CLAIM NOT TESTED.** The fake reviewer read the bundle: the report matches results.json, the diff touches f only, no suite exercises it, one repetition in a fixed order."\n' > "$er/rev"; chmod +x "$er/rev"
+rep=$(ls -dt /tmp/selftest-runs/2*/ 2>/dev/null | head -1)
+REVIEWER="$er/rev" bash scripts/evidence-review.sh "$rep" --checkout "$er/co" --base HEAD~1 --head HEAD --pr-url https://example.invalid/pull/1 > "$er/out.txt" 2>&1
+[ -s "$rep/REVIEW.md" ] && grep -q "CLAIM NOT TESTED" "$rep/REVIEW.md" && [ -s "$rep/review/pr.patch" ] && grep -q "^candidate" "$rep/review/run.txt" && grep -qi "read-only" "$rep/review/TASK.md" && [ -f "$rep/review/suites/basic.py" ] && ok "evidence-review.sh: bundle built (diff, report, results, suites, run facts), second opinion extracted" || bad "evidence-review.sh: $(cat "$er/out.txt" | tail -2) $(cat "$rep/review-missing.txt" 2>/dev/null)"
+REVIEWER=/bin/false bash scripts/evidence-review.sh "$rep" --checkout "$er/co" --base HEAD~1 --head HEAD > /dev/null 2>&1; rc=$?
+[ "$rc" = 0 ] && [ -s "$rep/review-missing.txt" ] && ok "evidence-review.sh: a reviewer that fails leaves review-missing.txt and exit 0" || bad "evidence-review.sh failure path: rc=$rc"
+rm -rf "$er"
 # issue-agent.sh with a fake agent and a fake gh: a local bare "origin", the live build = the bad server (shows the problem)
 nohup python3 tests/fake_server.py 18612 --wrong > /dev/null 2>&1 &
 badpid=$!; sleep 0.7
