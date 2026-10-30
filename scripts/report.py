@@ -10,7 +10,7 @@ Numbers come from results.json only. Candidate and control come from its meta (w
 order is reported as unknown, never guessed. Every repetition is compared, and an error never counts as a matching
 reply. The "what this run does not show" section lists the suites that did not run or were skipped, for the author to
 complete."""
-import argparse, html, json, os, re, statistics, sys
+import argparse, html, json, os, re, statistics
 
 ALL_SUITES = ("smoke", "boundary", "cutin", "soak", "fault", "bench")
 NOT_SHOWN = {"smoke": "basic answers, greedy repeat equality and streaming", "boundary": "reply equality at chunk ends and prefix-cache cases",

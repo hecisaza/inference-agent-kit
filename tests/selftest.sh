@@ -6,6 +6,7 @@ fail=0; ok() { echo "ok   $*"; }; bad() { echo "FAIL $*"; fail=1; }
 for f in scripts/*.sh tests/*.sh; do bash -n "$f" && ok "bash -n $f" || bad "bash -n $f"; done
 command -v shellcheck >/dev/null && { shellcheck -S warning scripts/*.sh tests/*.sh && ok shellcheck || bad shellcheck; }
 for f in scripts/pairtest scripts/canary.py suites/*.py evals/agent26/*.py; do python3 -m py_compile "$f" && ok "compile $f" || bad "compile $f"; done
+if python3 -m pyflakes --version >/dev/null 2>&1; then python3 -m pyflakes scripts/pairtest scripts/*.py suites/*.py evals/agent26/*.py tests/*.py && ok "pyflakes clean" || bad "pyflakes"; else echo "note: pyflakes not installed (pip install pyflakes); skipping the undefined-name check"; fi
 python3 -c "import yaml; yaml.safe_load(open('lab.example.yaml')); yaml.safe_load(open('owner.example.yaml'))" && ok "example yaml parses" || bad "example yaml"
 out=$(python3 scripts/pairtest plan --lab lab.example.yaml --target control --dry 2>&1) && grep -q "tensorfold-dsv41:control" <<<"$out" && ok "pairtest plan (dry, inherit)" || bad "pairtest plan: $out"
 # canary: a fix that a test catches, and one it does not
@@ -49,6 +50,16 @@ rep=$(ls -dt /tmp/selftest-runs/2*/ 2>/dev/null | head -1)
 grep -q "candidate" "$rep/report.md" && grep -q "Restore: live restored" "$rep/report.md" && [ -s "$rep/report.html" ] && grep -q "does not show" "$rep/report.md" && ok "report.py: candidate/control from meta, restore recorded, limits list, html written" || bad "report.py output incomplete"
 curl -s -m 3 http://127.0.0.1:18611/v1/models | grep -q fake-model && ok "live restored after the run" || bad "live not restored"
 curl -s -m 2 http://127.0.0.1:18612/v1/models >/dev/null 2>&1 && bad "the tested target (port 18612) was left running" || ok "the tested target was stopped before live was restored"
+# restore is a no-op while live is up (same server process afterwards), and starts live when it is down
+pid=$(pgrep -f "fake_server.py 18611" | head -1)
+r=$(python3 scripts/pairtest restore --lab tests/lab-fake.yaml 2>&1)
+echo "$r" | grep -q "nothing to do" && [ "$(pgrep -f "fake_server.py 18611" | head -1)" = "$pid" ] && ok "restore leaves a healthy live alone" || bad "restore while live is up: $r"
+pkill -f "fake_server.py 18611" 2>/dev/null; sleep 0.5
+r=$(python3 scripts/pairtest restore --lab tests/lab-fake.yaml 2>&1)
+curl -s -m 3 http://127.0.0.1:18611/v1/models | grep -q fake-model && ok "restore starts live when it is down" || bad "restore with live down: $r"
+# --dry build + ship on a recipe-docker target: the plan is printed, nothing runs
+r=$(python3 scripts/pairtest build --lab tests/lab-fake.yaml --target img --dry 2>&1); rc=$?
+[ "$rc" = 0 ] && echo "$r" | grep -q "would ship fake:img from here to there" && ok "build --dry (recipe-docker): build and ship plan printed" || bad "build --dry: rc=$rc $r"
 # a failing suite fails the run, and live is still restored
 r=$(python3 scripts/pairtest run --lab tests/lab-fake.yaml --target bad --suite smoke --runs /tmp/selftest-runs 2>&1); rc=$?
 [ "$rc" = 1 ] && echo "$r" | grep -q "NOT OK: bad/smoke" && ok "a failing suite gives exit 1 and names the suite" || bad "failing suite: rc=$rc"

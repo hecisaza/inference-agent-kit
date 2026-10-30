@@ -1,7 +1,7 @@
 """smoke, boundary and cutin suites. Each run(ctx) returns a dict that pairtest writes to the report.
 
 ctx: dict(api, model, out (run directory), opts (suite options from the command line), log (callable))."""
-import json, os, threading, time
+import threading, time
 from common import chat, words
 
 

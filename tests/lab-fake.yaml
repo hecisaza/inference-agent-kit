@@ -3,6 +3,8 @@
 # bad: answers wrongly, so the self-test can check that a failing suite fails the run.
 hosts:
   here: { local: true, platform: generic }
+  there: { address: 127.0.0.1, platform: generic }   # never reached: only --dry commands name it
+build_host: here
 
 live:
   backend: command
@@ -26,3 +28,12 @@ targets:
   bad:
     inherit: b
     start: "nohup python3 $KIT/tests/fake_server.py 18612 --wrong > /tmp/fake-bad.log 2>&1 &"
+  img:   # a recipe-docker target for the self-test's --dry build and ship (nothing is built; the plan is printed)
+    backend: recipe-docker
+    head: here
+    recipe_dir: /tmp/nowhere
+    start: ./start.sh
+    image: fake:img
+    build: { recipe_checkout: /tmp/nowhere, command: ./build.sh }
+    api: http://127.0.0.1:18613/v1
+    model: fake-model

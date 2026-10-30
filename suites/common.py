@@ -62,6 +62,15 @@ def chat(api, model, messages, max_tokens=64, temperature=0, thinking=False, str
     return out
 
 
+def api_up(api, model=None):
+    """One quick check (no retries): the API answers /models, and lists `model` when one is given."""
+    try:
+        d = json.load(urllib.request.urlopen(api.rstrip("/") + "/models", timeout=5))
+    except (urllib.error.URLError, OSError, ValueError):
+        return False
+    return model is None or any(m.get("id") == model for m in d.get("data", []) if isinstance(m, dict))
+
+
 def ready(api, limit=1800):
     t0 = time.time()
     while time.time() - t0 < limit:

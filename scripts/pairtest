@@ -11,7 +11,7 @@ and stopped) and its host names a platform (how it is probed); the suites only n
                                                       last target and start what lab.yaml calls live: also on a failed suite, an
                                                       exception, Ctrl-C or SIGTERM. Exit status 1 when any suite is not ok or the
                                                       restore or report failed.
-  pairtest restore --lab lab.yaml                     stop any target this lab knows and start the live configuration
+  pairtest restore --lab lab.yaml                     start the live configuration when it is not up (stops known targets first)
   --dry                                               print every host command; no command runs, no request is sent
 
 Backends (target.backend, default recipe-docker):
@@ -30,7 +30,7 @@ import yaml
 HERE = os.path.dirname(os.path.realpath(__file__))
 sys.path.insert(0, os.path.join(HERE, "..", "suites"))
 import basic, heavy, probes  # noqa: E402
-from common import ready  # noqa: E402
+from common import ready, api_up  # noqa: E402
 
 SUITES = {**basic.SUITES, **heavy.SUITES}
 PUBLIC_ENV_DEFAULT = r"^(TF_|TENSORFOLD_|VLLM_|LLAMA_|MLX_|SGLANG_|OLLAMA_|CUDA_VISIBLE_DEVICES$|PARALLEL$|CONTEXT$|REASONING_EFFORT$|THINKING$)"
@@ -142,10 +142,18 @@ class RecipeDocker:
         b = t.get("build") or sys.exit("target has no build: section")
         self.lab.sh(self.lab.c["build_host"], f"cd {rpath(b['recipe_checkout'])} && IMAGE={shlex.quote(t['image'])} {b['command']}", check=True)
 
+    def running(self, t):
+        """True when a container from the target's image runs on its head (False without an image: nothing to compare)."""
+        return bool(t.get("image")) and bool(self.lab.sh(t["head"], f"docker ps -q --filter ancestor={shlex.quote(t['image'])}").strip())
+
     def ship(self, t):
-        lab, img, src = self.lab, t["image"], lab.c.get("build_host") or sys.exit("lab.yaml has no build_host")
+        lab = self.lab
+        img = t["image"]
+        src = lab.c.get("build_host") or sys.exit("lab.yaml has no build_host")
         dst = [h for h in lab.c["hosts"] if h != src]
         need = int(lab.c.get("min_free_gb", 60))
+        if lab.dry:
+            print(f"[dry] would ship {img} from {src} to {', '.join(dst) or '(no other host)'} after checking {need} GB free under each docker root"); return
         for h in dst:  # docker's own storage, not the home filesystem; an unreadable value refuses
             root = lab.sh(h, "docker info -f '{{.DockerRootDir}}' 2>/dev/null").strip() or "/var/lib/docker"
             g = lab.free_gb(h, shlex.quote(root))
@@ -194,6 +202,8 @@ class Command:
         p = rpath(t["artifact"])  # a file: its content hash; a directory: the hash of its file list with sizes
         return self.lab.sh(host, f"if [ -d {p} ]; then (cd {p} && find . -type f -exec ls -l {{}} + | awk '{{print $NF, $5}}' | LC_ALL=C sort | {SHA}); else {SHA} < {p}; fi 2>/dev/null").strip()
 
+    def running(self, t): return None  # no artifact to compare: the API decides
+
     def build(self, t):
         b = t.get("build") or sys.exit("target has no build: section")
         self.lab.sh(b.get("host", self.lab.c.get("build_host", t["host"])), f"cd {rpath(b.get('cwd', '~'))} && {b['command']}", check=True)
@@ -224,6 +234,8 @@ class Service:
         log(f"stop service {t['service']['name']} on {t['host']}"); self.lab.sh(t["host"], self.cmds(t)[1])
 
     def artifact_id(self, host, t): return ""
+    def running(self, t): return None  # no artifact to compare: the API decides
+
     def build(self, t): sys.exit("build is not defined for a service backend")
     def ship(self, t): print("ship: nothing to ship for a service backend")
 
@@ -346,7 +358,11 @@ def cmd_run(lab, a):
 
 
 def cmd_restore(lab, a):
+    """Put live back only when it is not up: the API answers with its model and, for an image, that image runs on the head."""
     log = print
+    live = lab.c["live"]
+    if not lab.dry and api_up(live["api"], live.get("model")) and backend(lab, live).running(live) is not False:
+        log(f"live is up ({live.get('model')} answers at {live['api']}): nothing to do"); return
     for name, t in lab.c["targets"].items():
         if t.get("backend", "recipe-docker") != "recipe-docker" and t.get("stop"):
             try:

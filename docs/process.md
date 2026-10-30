@@ -50,7 +50,7 @@ Produces: a run directory with a report.
     scripts/pairtest plan  --lab lab.yaml --target <name>         # print what would happen, change nothing
     scripts/pairtest build --lab lab.yaml --target <name>         # build on the build box, stream to all serving boxes
     scripts/pairtest run   --lab lab.yaml --target <name> --suite smoke,boundary,soak --compare <baseline-target>
-    scripts/pairtest restore --lab lab.yaml                       # put back what lab.yaml says is live
+    scripts/pairtest restore --lab lab.yaml                       # put back what lab.yaml says is live (no-op when it is up)
     scripts/report.py runs/<time>                                 # (re)generate report.md, report.html and the charts
 
 Get the owner's go for the downtime first (what goes down, how long, the fallback). `run` stops the target it tested
