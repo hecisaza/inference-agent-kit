@@ -47,24 +47,24 @@ for port in 18611 18612; do pgrep -f "fake_server.py $port" | xargs -r kill 2>/d
 r=$(python3 scripts/pairtest run --lab tests/lab-fake.yaml --target b --compare a --suite smoke,boundary --runs /tmp/selftest-runs 2>&1); rc=$?
 rep=$(ls -dt /tmp/selftest-runs/2*/ 2>/dev/null | head -1)
 [ "$rc" = 0 ] && grep -qE "\*\*19 of 19\*\*" "$rep/report.md" 2>/dev/null && ok "pairtest run (command backend, two local fake servers): exit 0, 19 of 19 hashes identical" || bad "pairtest run: rc=$rc $(echo "$r" | tail -4)"
-grep -q "candidate" "$rep/report.md" && grep -q "Restore: live restored" "$rep/report.md" && [ -s "$rep/report.html" ] && grep -q "does not show" "$rep/report.md" && ok "report.py: candidate/control from meta, restore recorded, limits list, html written" || bad "report.py output incomplete"
+grep -q "candidate" "$rep/report.md" && grep -q "Restore: live kept running (the last target, a, is the live configuration)" "$rep/report.md" && [ -s "$rep/report.html" ] && grep -q "does not show" "$rep/report.md" && ok "report.py: candidate/control from meta, live kept running when the control is live, limits list, html written" || bad "report.py output incomplete"
 curl -s -m 3 http://127.0.0.1:18611/v1/models | grep -q fake-model && ok "live restored after the run" || bad "live not restored"
 curl -s -m 2 http://127.0.0.1:18612/v1/models >/dev/null 2>&1 && bad "the tested target (port 18612) was left running" || ok "the tested target was stopped before live was restored"
-# the recipe-docker running() check reads image: or env.IMAGE, and is unknown (None) without either
-python3 - <<'PY' && ok "RecipeDocker.running: image:, env.IMAGE, none" || bad "RecipeDocker.running"
+# config_hash: image: and env.IMAGE are the same configuration; a different env or recipe_dir is not
+python3 - <<'PY' && ok "config_hash: same config under image: or env.IMAGE; env and recipe_dir differences count" || bad "config_hash"
 import importlib.machinery, types
 m = importlib.machinery.SourceFileLoader("pairtest", "scripts/pairtest").load_module()
-lab = types.SimpleNamespace(sh=lambda host, cmd: "abc123\n" if "ancestor=x:1" in cmd else "", dry=False)
-be = m.RecipeDocker(lab)
-assert be.running({"head": "h", "image": "x:1"}) is True
-assert be.running({"head": "h", "env": {"IMAGE": "x:1"}}) is True
-assert be.running({"head": "h", "image": "y:2"}) is False
-assert be.running({"head": "h"}) is None
+lab = types.SimpleNamespace(c={}, dry=False, sh=lambda host, cmd: "")
+live = {"head": "h", "recipe_dir": "~/r", "start": "./start.sh", "env": {"PREPARE": "0", "IMAGE": "x:1"}}
+ctrl = {"head": "h", "recipe_dir": "~/r", "start": "./start.sh", "image": "x:1", "env": {"PREPARE": "0"}}
+assert m.config_hash(lab, live) == m.config_hash(lab, ctrl)
+assert m.config_hash(lab, live) != m.config_hash(lab, {**ctrl, "env": {"PREPARE": "0", "TF_X": "1"}})
+assert m.config_hash(lab, live) != m.config_hash(lab, {**ctrl, "recipe_dir": "~/pr"})
 PY
 # restore is a no-op while live is up (same server process afterwards), and starts live when it is down
 pid=$(pgrep -f "fake_server.py 18611" | head -1)
 r=$(python3 scripts/pairtest restore --lab tests/lab-fake.yaml 2>&1)
-echo "$r" | grep -q "nothing to do" && [ "$(pgrep -f "fake_server.py 18611" | head -1)" = "$pid" ] && ok "restore leaves a healthy live alone" || bad "restore while live is up: $r"
+echo "$r" | grep -q "nothing to do" && [ "$(pgrep -f "fake_server.py 18611" | head -1)" = "$pid" ] && ok "restore leaves a healthy live alone (marker matches)" || bad "restore while live is up: $r"
 pkill -f "fake_server.py 18611" 2>/dev/null; sleep 0.5
 r=$(python3 scripts/pairtest restore --lab tests/lab-fake.yaml 2>&1)
 curl -s -m 3 http://127.0.0.1:18611/v1/models | grep -q fake-model && ok "restore starts live when it is down" || bad "restore with live down: $r"

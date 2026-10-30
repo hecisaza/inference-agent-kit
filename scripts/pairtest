@@ -24,7 +24,7 @@ What reaches results.json and the report (shareable): target names, image/artifa
 the environment keys that match lab.public_env (a regex; default engine switches such as TF_*, VLLM_*, LLAMA_*), with
 values of keys that look like secrets redacted. Host names, addresses, users, paths and launch commands stay in log.txt
 (local). Nothing here pushes, posts, uploads or downloads models."""
-import argparse, datetime, json, os, re, shlex, signal, subprocess, sys, time
+import argparse, datetime, hashlib, json, os, re, shlex, signal, subprocess, sys, time
 import yaml
 
 HERE = os.path.dirname(os.path.realpath(__file__))
@@ -37,6 +37,7 @@ PUBLIC_ENV_DEFAULT = r"^(TF_|TENSORFOLD_|VLLM_|LLAMA_|MLX_|SGLANG_|OLLAMA_|CUDA_
 SECRET_KEY = re.compile(r"(TOKEN|SECRET|PASS|KEY|CREDENTIAL|AUTH)", re.I)
 # a portable sha256 of stdin (sha256sum on Linux, shasum on macOS)
 SHA = "{ sha256sum 2>/dev/null || shasum -a 256; } | cut -c1-12"
+MARK = "~/.pairtest-current"  # on a target's host: which configuration pairtest started there last (restore reads it)
 
 
 def load(path):
@@ -125,7 +126,7 @@ class RecipeDocker:
     def __init__(self, lab): self.lab = lab
 
     def env(self, t):
-        return " ".join(f"{k}={shlex.quote(str(v))}" for k, v in {**t.get("env", {}), **({"IMAGE": t["image"]} if t.get("image") else {})}.items())
+        return " ".join(f"{k}={shlex.quote(str(v))}" for k, v in sorted({**t.get("env", {}), **({"IMAGE": t["image"]} if t.get("image") else {})}.items()))
 
     def start(self, t, log):
         log(f"start {t.get('image', 'live')} on {t['head']} ({t['recipe_dir']})")
@@ -142,12 +143,14 @@ class RecipeDocker:
         b = t.get("build") or sys.exit("target has no build: section")
         self.lab.sh(self.lab.c["build_host"], f"cd {rpath(b['recipe_checkout'])} && IMAGE={shlex.quote(t['image'])} {b['command']}", check=True)
 
-    def running(self, t):
-        """True when a container from the target's image (image:, or IMAGE in its env) runs on its head; None without an image."""
+    def ident(self, t):
+        """What makes two recipe-docker targets the same configuration: where and how they start, with the full env."""
+        return {"backend": "recipe-docker", "head": t["head"], "recipe_dir": t["recipe_dir"], "start": t["start"], "stop": t.get("stop", "./stop.sh"), "env": self.env(t)}
+
+    def looks_live(self, t):
+        """Weaker evidence, used only before the first marked start: a container of the target's image name runs on its head."""
         img = t.get("image") or (t.get("env") or {}).get("IMAGE")
-        if not img:
-            return None
-        return bool(self.lab.sh(t["head"], f"docker ps -q --filter ancestor={shlex.quote(str(img))}").strip())
+        return bool(img) and str(img) in self.lab.sh(t["head"], "docker ps --format '{{.Image}}'").split()
 
     def ship(self, t):
         lab = self.lab
@@ -163,6 +166,9 @@ class RecipeDocker:
             if g is None or g < need:
                 sys.exit(f"{h}: {g if g is not None else 'unknown'} GB free under {root} (min_free_gb {need}): not shipping")
         want = self.artifact_id(src, t) or sys.exit(f"{img} is not on {src}")
+        for h in dst:  # a host that has the same image id under another tag only needs the tag
+            if self.artifact_id(h, t) != want and lab.sh(h, f"docker image inspect -f '{{{{.Id}}}}' {want} 2>/dev/null").strip():
+                print(f"{h}: has image {want} under another tag; tagging it {img}"); lab.sh(h, f"docker tag {want} {shlex.quote(img)}", check=True)
         todo = [h for h in dst if self.artifact_id(h, t) != want]
         if todo:
             def u(h):
@@ -205,7 +211,10 @@ class Command:
         p = rpath(t["artifact"])  # a file: its content hash; a directory: the hash of its file list with sizes
         return self.lab.sh(host, f"if [ -d {p} ]; then (cd {p} && find . -type f -exec ls -l {{}} + | awk '{{print $NF, $5}}' | LC_ALL=C sort | {SHA}); else {SHA} < {p}; fi 2>/dev/null").strip()
 
-    def running(self, t): return None  # no artifact to compare: the API decides
+    def ident(self, t):
+        return {"backend": "command", "host": t["host"], "cwd": t.get("cwd", "~"), "start": t["start"], "stop": t.get("stop"), "env": t.get("env", {})}
+
+    def looks_live(self, t): return True  # the API is all there is
 
     def build(self, t):
         b = t.get("build") or sys.exit("target has no build: section")
@@ -237,7 +246,8 @@ class Service:
         log(f"stop service {t['service']['name']} on {t['host']}"); self.lab.sh(t["host"], self.cmds(t)[1])
 
     def artifact_id(self, host, t): return ""
-    def running(self, t): return None  # no artifact to compare: the API decides
+    def ident(self, t): return {"backend": "service", "host": t["host"], "service": t["service"], "env_file": t.get("env_file"), "env": t.get("env", {})}
+    def looks_live(self, t): return True  # the API is all there is
 
     def build(self, t): sys.exit("build is not defined for a service backend")
     def ship(self, t): print("ship: nothing to ship for a service backend")
@@ -251,6 +261,39 @@ def backend(lab, t):
     return BACKENDS[name](lab) if name in BACKENDS else sys.exit(f"unknown backend {name!r}; have {sorted(BACKENDS)}")
 
 
+def host_of(t):
+    return t.get("head", t.get("host", "local"))
+
+
+def config_hash(lab, t):
+    """Two targets with the same hash are the same running configuration (same host, launch and environment)."""
+    return hashlib.sha256(json.dumps(backend(lab, t).ident(t), sort_keys=True, default=str).encode()).hexdigest()[:12]
+
+
+def mark(lab, t, name):
+    """Record on the target's host which configuration was started there last."""
+    body = json.dumps({"target": name, "hash": config_hash(lab, t), "started": datetime.datetime.now().isoformat(timespec="seconds")})
+    lab.sh(host_of(t), f"printf %s {shlex.quote(body)} > {rpath(MARK)}")
+
+
+def marked(lab, t):
+    out = lab.sh(host_of(t), f"cat {rpath(MARK)} 2>/dev/null").strip()
+    try:
+        return json.loads(out) if out else None
+    except ValueError:
+        return None
+
+
+def live_is_up(lab):
+    """The live API answers with its model, and the configuration started last on its host is live's (the marker);
+    before any marked start, the backend's weaker evidence decides (for an image: its name is what runs)."""
+    live = lab.c["live"]
+    if not api_up(live["api"], live.get("model")):
+        return False
+    m = marked(lab, live)
+    return m.get("hash") == config_hash(lab, live) if m else backend(lab, live).looks_live(live)
+
+
 class Switcher:
     """Starts targets one at a time: the one that runs is stopped before the next starts, so no two coexist."""
 
@@ -261,6 +304,7 @@ class Switcher:
         if self.current and self.current[0] != name:
             backend(self.lab, self.current[1]).stop(self.current[1], self.log)
         backend(self.lab, t).start(t, self.log)
+        mark(self.lab, t, name)
         self.current = (name, t)
         if not self.lab.dry:
             self.log(f"ready after {ready(t['api'])} s")
@@ -341,13 +385,18 @@ def cmd_run(lab, a):
     finally:
         if not a.no_restore:
             try:
-                log("restore: stop the last target, start live")
-                if sw.current:
-                    backend(lab, sw.current[1]).stop(sw.current[1], log)
-                backend(lab, lab.c["live"]).start(lab.c["live"], log)
-                if not lab.dry:
-                    log(f"live ready after {ready(lab.c['live']['api'])} s")
-                meta["restore"] = "live restored"
+                live = lab.c["live"]
+                if sw.current and config_hash(lab, sw.current[1]) == config_hash(lab, live):
+                    log(f"restore: the last target ({sw.current[0]}) is the live configuration; it stays up")
+                    meta["restore"] = f"live kept running (the last target, {sw.current[0]}, is the live configuration)"
+                else:
+                    log("restore: stop the last target, start live")
+                    if sw.current:
+                        backend(lab, sw.current[1]).stop(sw.current[1], log)
+                    backend(lab, live).start(live, log); mark(lab, live, "live")
+                    if not lab.dry:
+                        log(f"live ready after {ready(live['api'])} s")
+                    meta["restore"] = "live restored"
             except Exception as e:  # noqa: BLE001
                 meta["restore"] = f"RESTORE FAILED: {e!r}"[:300]; log(meta["restore"]); failed.append("restore")
         json.dump(results, open(os.path.join(run, "results.json"), "w"), indent=1)
@@ -361,20 +410,20 @@ def cmd_run(lab, a):
 
 
 def cmd_restore(lab, a):
-    """Put live back only when it is not up: the API answers with its model and, for an image, that image runs on the head."""
+    """Put live back only when it is not up (API answers with its model, and live's configuration was the last one started)."""
     log = print
     live = lab.c["live"]
-    if not lab.dry and api_up(live["api"], live.get("model")) and backend(lab, live).running(live) is not False:
-        log(f"live is up ({live.get('model')} answers at {live['api']}): nothing to do"); return
+    if not lab.dry and live_is_up(lab):
+        log(f"live is up ({live.get('model')} answers at {live['api']} and nothing else was started since): nothing to do"); return
     for name, t in lab.c["targets"].items():
         if t.get("backend", "recipe-docker") != "recipe-docker" and t.get("stop"):
             try:
                 backend(lab, t).stop(t, log)
             except Exception as e:  # noqa: BLE001
                 log(f"stop {name}: {e!r}")
-    backend(lab, lab.c["live"]).start(lab.c["live"], log)
+    backend(lab, live).start(live, log); mark(lab, live, "live")
     if not lab.dry:
-        log(f"live ready after {ready(lab.c['live']['api'])} s")
+        log(f"live ready after {ready(live['api'])} s")
 
 
 def main():
