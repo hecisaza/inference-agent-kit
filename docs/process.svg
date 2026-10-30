@@ -1,0 +1,49 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1180 300" width="1180" height="300" font-family="ui-sans-serif, system-ui, -apple-system, Segoe UI, Helvetica, Arial, sans-serif">
+  <defs>
+    <marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="#5B6B7A"/></marker>
+    <marker id="g" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="#B45309"/></marker>
+  </defs>
+  <rect width="1180" height="300" fill="#FFFFFF"/>
+  <!-- stages: x = 20 + i*195, box 170x70 at y=60 -->
+  <g font-size="13" fill="#16202A">
+    <rect x="20" y="60" width="170" height="70" rx="6" fill="#F1F4F6" stroke="#0F766E" stroke-width="3"/>
+    <text x="32" y="84" font-weight="700">0  Intake</text><text x="32" y="104" font-size="12" fill="#5B6B7A">sync.sh: upstream state,</text><text x="32" y="120" font-size="12" fill="#5B6B7A">free patch number</text>
+    <rect x="215" y="60" width="170" height="70" rx="6" fill="#F1F4F6" stroke="#0F766E" stroke-width="3"/>
+    <text x="227" y="84" font-weight="700">1  Build + host tests</text><text x="227" y="104" font-size="12" fill="#5B6B7A">branch, tests before/after,</text><text x="227" y="120" font-size="12" fill="#5B6B7A">canary.py per fix</text>
+    <rect x="410" y="60" width="170" height="70" rx="6" fill="#F1F4F6" stroke="#0F766E" stroke-width="3"/>
+    <text x="422" y="84" font-weight="700">2  Review</text><text x="422" y="104" font-size="12" fill="#5B6B7A">review.sh: a second agent,</text><text x="422" y="120" font-size="12" fill="#5B6B7A">read-only, code + PR text</text>
+    <rect x="605" y="60" width="170" height="70" rx="6" fill="#FBF3E9" stroke="#B45309" stroke-width="3"/>
+    <text x="617" y="84" font-weight="700">3  Hardware</text><text x="617" y="104" font-size="12" fill="#5B6B7A">pairtest: suites vs control,</text><text x="617" y="120" font-size="12" fill="#5B6B7A">report.py, restore live</text>
+    <rect x="800" y="60" width="170" height="70" rx="6" fill="#FBF3E9" stroke="#B45309" stroke-width="3"/>
+    <text x="812" y="84" font-weight="700">4  Pull request</text><text x="812" y="104" font-size="12" fill="#5B6B7A">templates/PR.md filled</text><text x="812" y="120" font-size="12" fill="#5B6B7A">from the evidence</text>
+    <rect x="995" y="60" width="170" height="70" rx="6" fill="#F1F4F6" stroke="#0F766E" stroke-width="3"/>
+    <text x="1007" y="84" font-weight="700">5  Follow-up</text><text x="1007" y="104" font-size="12" fill="#5B6B7A">rebase when the base</text><text x="1007" y="120" font-size="12" fill="#5B6B7A">merges; replies via owner</text>
+  </g>
+  <!-- arrows between stages, gate text under each arrow -->
+  <g stroke="#5B6B7A" stroke-width="2" fill="none" marker-end="url(#a)">
+    <path d="M190 95 L213 95"/><path d="M385 95 L408 95"/><path d="M580 95 L603 95"/><path d="M775 95 L798 95"/><path d="M970 95 L993 95"/>
+  </g>
+  <g font-size="11" fill="#5B6B7A" text-anchor="middle">
+    <text x="202" y="48">owner confirms</text><text x="202" y="36">scope + base</text>
+    <text x="397" y="48">tests pass,</text><text x="397" y="36">every fix caught</text>
+    <text x="592" y="48">no open P1</text>
+    <text x="787" y="48">report clean</text><text x="787" y="36">or understood</text>
+    <text x="982" y="48">merged or</text><text x="982" y="36">closed with a note</text>
+  </g>
+  <!-- the owner -->
+  <circle cx="787" cy="225" r="34" fill="#FBE8D3" stroke="#B45309" stroke-width="3"/>
+  <text x="787" y="221" font-size="12" font-weight="700" fill="#16202A" text-anchor="middle">owner's</text>
+  <text x="787" y="237" font-size="12" font-weight="700" fill="#16202A" text-anchor="middle">explicit go</text>
+  <g stroke="#B45309" stroke-width="2" stroke-dasharray="6 4" fill="none" marker-end="url(#g)">
+    <path d="M760 205 L700 133"/><path d="M814 205 L874 133"/>
+  </g>
+  <g font-size="11" fill="#B45309">
+    <text x="640" y="185">downtime window</text><text x="876" y="185">push, open, comment</text>
+  </g>
+  <!-- legend -->
+  <g font-size="11" fill="#5B6B7A">
+    <rect x="20" y="268" width="18" height="4" fill="#0F766E"/><text x="44" y="273">gate the agent checks itself</text>
+    <rect x="210" y="268" width="18" height="4" fill="#B45309"/><text x="234" y="273">gate that needs the owner</text>
+    <text x="420" y="273">Small changes (docs, a typo) may skip 2 and 3; the agent says so.</text>
+  </g>
+</svg>
