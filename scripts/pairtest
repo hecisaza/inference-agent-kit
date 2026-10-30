@@ -214,7 +214,13 @@ def cmd_run(lab, a):
     logf = open(os.path.join(run, "log.txt"), "a")
     def log(m):  # noqa: E306
         line = f"{datetime.datetime.now():%H:%M:%S} {m}"; print(line, flush=True); logf.write(line + "\n"); logf.flush()
-    results = {}
+    kit_rev = subprocess.run(["git", "-C", HERE, "rev-parse", "--short", "HEAD"], capture_output=True, text=True).stdout.strip()
+    meta = {"targets_order": names, "suites": suites, "opts": opts, "started": datetime.datetime.now().isoformat(timespec="seconds"), "kit": kit_rev,
+            "lab": {k: lab.c.get(k) for k in ("fabric",) if lab.c.get(k)}, "conditions": opts.get("conditions", ""),
+            "targets": {n: {k: v for k, v in lab.c["targets"][n].items() if k in ("image", "artifact", "model", "env", "backend", "chunk")} for n in names}}
+    for n in names:
+        t = lab.c["targets"][n]; meta["targets"][n]["artifact_id"] = "" if lab.dry else backend(lab, t).artifact_id(t.get("head", t.get("host", "local")), t)
+    results = {"meta": meta}
     try:
         for rep in range(int(opts.get("reps", 1))):
             for name in (names if rep % 2 == 0 else names[::-1]):  # alternate A,B then B,A
@@ -238,7 +244,9 @@ def cmd_run(lab, a):
     finally:
         if lab.c.get("live"):
             log("restore live"); start(lab, lab.c["live"], log)
-    write_report(run, names, suites, results); log(f"report: {run}/report.md")
+    write_report(run, names, suites, {k: v for k, v in results.items() if k != "meta"})
+    r = subprocess.run([sys.executable, os.path.join(HERE, "report.py"), run, "--title", f"{names[0]} vs {names[1]}" if len(names) > 1 else names[0]], capture_output=True, text=True)
+    log(r.stdout.strip() or r.stderr.strip()[-300:]); log(f"report: {run}/report.md and report.html")
 
 
 def write_report(run, names, suites, results):
@@ -253,7 +261,7 @@ def write_report(run, names, suites, results):
             same = sum(x[2] == y[2] for x, y in zip(a, b))
             L.append(f"- **{names[0]} vs {names[1]}**: {same} of {len(a)} reply hashes identical" + ("" if same == len(a) else f"; differ: {[x[0] for x, y in zip(a, b) if x[2] != y[2]]}"))
         L.append("")
-    open(os.path.join(run, "report.md"), "w").write("\n".join(L))
+    open(os.path.join(run, "summary.md"), "w").write("\n".join(L))
 
 
 def main():

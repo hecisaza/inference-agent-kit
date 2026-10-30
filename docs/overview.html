@@ -1,0 +1,173 @@
+<title>Spark Agent Kit</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Sora:wght@500;600;700&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+:root{
+  --bg:#F1F4F6; --surface:#FFFFFF; --ink:#16202A; --muted:#5B6B7A; --line:#D6DDE3;
+  --accent:#0F766E; --accent-soft:#D9F0ED; --go:#B45309; --go-soft:#FBE8D3; --code-bg:#E8EDF1;
+  --display:"Sora",system-ui,sans-serif; --body:"IBM Plex Sans",system-ui,sans-serif; --mono:"IBM Plex Mono",ui-monospace,Menlo,monospace;
+}
+@media (prefers-color-scheme: dark){ :root:not([data-theme="light"]){
+  color-scheme:dark; --bg:#0F1519; --surface:#18212A; --ink:#E6EBEF; --muted:#94A3B0; --line:#2A3540;
+  --accent:#2DD4BF; --accent-soft:#113B38; --go:#F59E0B; --go-soft:#3B2A0F; --code-bg:#121A21; } }
+:root[data-theme="dark"]{
+  color-scheme:dark; --bg:#0F1519; --surface:#18212A; --ink:#E6EBEF; --muted:#94A3B0; --line:#2A3540;
+  --accent:#2DD4BF; --accent-soft:#113B38; --go:#F59E0B; --go-soft:#3B2A0F; --code-bg:#121A21; }
+body{background:var(--bg);color:var(--ink);font-family:var(--body);font-size:15px;line-height:1.5;padding:0 20px;padding-block:28px 48px;}
+.wrap{max-width:1160px;margin:0 auto;}
+h1,h2,h3{font-family:var(--display);text-wrap:balance;margin:0}
+h1{font-size:clamp(28px,4vw,40px);font-weight:700;letter-spacing:-.01em}
+h2{font-size:20px;font-weight:600;margin-bottom:12px}
+h3{font-size:15px;font-weight:600}
+p{margin:0}
+.lede{color:var(--muted);max-width:68ch;margin-top:8px;font-size:16px}
+.eyebrow{font-family:var(--mono);font-size:11.5px;letter-spacing:.12em;text-transform:uppercase;color:var(--muted)}
+code,.path{font-family:var(--mono);font-size:12.5px;background:var(--code-bg);padding:1px 5px;border-radius:4px;white-space:nowrap}
+section{margin-top:40px}
+/* pipeline */
+.pipe{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:0;margin-top:16px;position:relative}
+.stage{position:relative;padding:14px 14px 16px 14px;border-top:3px solid var(--accent);background:var(--surface);min-width:0}
+.stage + .stage{margin-left:10px}
+.stage.go{border-top-color:var(--go)}
+.stage .num{font-family:var(--mono);font-size:11.5px;color:var(--muted);letter-spacing:.08em}
+.stage h3{margin-top:2px}
+.stage ul{margin:10px 0 0;padding-left:16px;color:var(--muted);font-size:13.5px}
+.stage li{margin:3px 0}
+.gate{margin-top:12px;padding:8px 10px;border-radius:6px;background:var(--accent-soft);font-size:13px;line-height:1.35}
+.gate b{display:block;font-family:var(--mono);font-size:10.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--accent);margin-bottom:2px}
+.stage.go .gate{background:var(--go-soft)} .stage.go .gate b{color:var(--go)}
+.stage::after{content:"";position:absolute;right:-10px;top:50%;width:10px;height:2px;background:var(--line)}
+.stage:last-child::after{display:none}
+.legend{display:flex;gap:18px;flex-wrap:wrap;margin-top:12px;font-size:13px;color:var(--muted)}
+.legend span::before{content:"";display:inline-block;width:14px;height:3px;vertical-align:middle;margin-right:7px;background:var(--accent)}
+.legend span.g::before{background:var(--go)}
+/* layers */
+.layers{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px;margin-top:4px}
+.layer{background:var(--surface);border:1px solid var(--line);padding:16px}
+.layer h3{display:flex;justify-content:space-between;align-items:baseline;gap:8px}
+.layer .eyebrow{font-size:10.5px}
+.layer dl{margin:12px 0 0;display:grid;grid-template-columns:auto 1fr;gap:6px 12px;font-size:13.5px}
+.layer dt{font-family:var(--mono);font-size:12px;white-space:nowrap}
+.layer dd{margin:0;color:var(--muted)}
+/* hardware */
+.hw{display:grid;grid-template-columns:1fr auto 1fr;gap:16px;align-items:stretch;margin-top:4px}
+.hw .box{background:var(--surface);border:1px solid var(--line);padding:14px 16px}
+.hw .arrow{display:flex;align-items:center;justify-content:center;color:var(--muted);font-family:var(--mono);font-size:12px;letter-spacing:.08em;writing-mode:vertical-rl;transform:rotate(180deg)}
+.chips{display:flex;flex-wrap:wrap;gap:8px;margin-top:10px}
+.chip{border:1px solid var(--line);border-radius:999px;padding:4px 11px;font-size:13px;background:var(--bg)}
+.chip b{font-weight:600}
+.hw p.note{color:var(--muted);font-size:13px;margin-top:10px}
+/* proof */
+.proof{display:grid;grid-template-columns:1.2fr 1fr;gap:16px;margin-top:4px}
+.proof .box{background:var(--surface);border:1px solid var(--line);padding:16px}
+.bars{margin-top:12px;display:grid;gap:10px;font-size:13px}
+.bar{display:grid;grid-template-columns:150px 1fr 70px;gap:10px;align-items:center}
+.bar .track{height:14px;background:var(--code-bg);position:relative;border-radius:3px;overflow:hidden}
+.bar .fill{position:absolute;inset:0 auto 0 0;background:var(--accent);border-radius:3px}
+.bar .v{font-family:var(--mono);font-variant-numeric:tabular-nums;text-align:right}
+.bar .lab{color:var(--muted)}
+table{border-collapse:collapse;width:100%;font-size:13.5px;margin-top:12px}
+td,th{padding:6px 8px;border-bottom:1px solid var(--line);text-align:left;vertical-align:top}
+th{font-family:var(--mono);font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);font-weight:500}
+td.n{font-family:var(--mono);font-variant-numeric:tabular-nums;white-space:nowrap}
+.foot{margin-top:36px;color:var(--muted);font-size:13px;max-width:80ch}
+.foot a{color:var(--accent)}
+@media (max-width:900px){
+  .pipe{grid-template-columns:1fr}
+  .stage + .stage{margin-left:0;margin-top:10px}
+  .stage::after{right:auto;left:24px;top:auto;bottom:-10px;width:2px;height:10px}
+  .layers,.proof{grid-template-columns:1fr}
+  .hw{grid-template-columns:1fr} .hw .arrow{writing-mode:horizontal-tb;transform:none;padding:4px 0}
+  .bar{grid-template-columns:1fr 70px} .bar .lab{grid-column:1/-1}
+}
+@media (prefers-reduced-motion:no-preference){ .bar .fill{transition:width .6s ease} }
+</style>
+
+<div class="wrap">
+  <p class="eyebrow">spark-agent-kit · one contract, one process, any hardware</p>
+  <h1>Spark Agent Kit</h1>
+  <p class="lede">How an AI coding agent contributes to a local-inference serving stack without surprises: six stages, each with a gate, the scripts that make each stage repeatable, and the rules every agent reads first. Built on what Mia's AI Lab gives its contributors.</p>
+
+  <section>
+    <p class="eyebrow">The process</p>
+    <h2>Six stages, five gates</h2>
+    <div class="pipe">
+      <div class="stage"><div class="num">STAGE 0</div><h3>Intake</h3>
+        <ul><li>Restate the task</li><li><code>sync.sh</code>: latest main, open PRs, free patch number, collisions</li></ul>
+        <div class="gate"><b>gate</b>Owner confirms scope and base; overlapping work named</div></div>
+      <div class="stage"><div class="num">STAGE 1</div><h3>Build &amp; host-test</h3>
+        <ul><li>Branch from the agreed base</li><li>Host tests before and after</li><li><code>canary.py</code>: a test per fix</li></ul>
+        <div class="gate"><b>gate</b>Tests pass; every fix caught when reverted</div></div>
+      <div class="stage"><div class="num">STAGE 2</div><h3>Review</h3>
+        <ul><li><code>review.sh</code>: read-only bundle</li><li>A second agent reviews code and PR text together</li></ul>
+        <div class="gate"><b>gate</b>No open P1; each P2 fixed or listed</div></div>
+      <div class="stage go"><div class="num">STAGE 3</div><h3>Hardware</h3>
+        <ul><li><code>pairtest</code>: build on an idle box, ship, run suites against a control, restore</li></ul>
+        <div class="gate"><b>owner's go</b>Downtime window approved; report clean or understood</div></div>
+      <div class="stage go"><div class="num">STAGE 4</div><h3>Pull request</h3>
+        <ul><li><code>templates/PR.md</code> filled from the report</li><li>Every claim re-read against the evidence</li></ul>
+        <div class="gate"><b>owner's go</b>Push, fork, open: explicit, every time</div></div>
+      <div class="stage"><div class="num">STAGE 5</div><h3>Follow-up</h3>
+        <ul><li>Rebase when the base PR merges</li><li>Replies to reviews go through the owner</li></ul>
+        <div class="gate"><b>gate</b>Merged, or closed with a note</div></div>
+    </div>
+    <div class="legend"><span>gate the agent checks itself</span><span class="g">gate that needs the owner's explicit go</span></div>
+  </section>
+
+  <section>
+    <p class="eyebrow">What runs underneath</p>
+    <h2>Three layers</h2>
+    <div class="layers">
+      <div class="layer"><h3>Rules <span class="eyebrow">AGENTS.md</span></h3>
+        <dl><dt>never skipped</dt><dd>nothing public without the owner's go; the owner's name on the work; neutral about the lab; no secrets; live services belong to people</dd>
+            <dt>attribution</dt><dd>Mia's AI Lab's credit rules: names on the first screen, keep every existing credit, no "inspired by"</dd>
+            <dt>contribution</dt><dd>Mia's rules: announce only once merged, related PRs together, no colliding CHANGELOG edits</dd></dl></div>
+      <div class="layer"><h3>Tools <span class="eyebrow">scripts/</span></h3>
+        <dl><dt>sync.sh</dt><dd>what upstream looks like right now</dd>
+            <dt>canary.py</dt><dd>switch each fix off, prove a test notices</dd>
+            <dt>review.sh</dt><dd>second-opinion review, answer extracted, hung reviewer stopped</dd>
+            <dt>pairtest</dt><dd>start, test, compare, report, restore — from <code>lab.yaml</code></dd></dl></div>
+      <div class="layer"><h3>Evidence <span class="eyebrow">suites/ · evals/</span></h3>
+        <dl><dt>smoke</dt><dd>arithmetic, greedy repeat, streaming</dd>
+            <dt>boundary</dt><dd>reply hashes at chunk ends and prefix-cache cases, sized to the engine's chunk</dd>
+            <dt>soak · cutin · fault</dt><dd>aborts and canaries over time; a short chat behind a long prompt; injected read faults</dd>
+            <dt>agent26</dt><dd>26 agent-style prompts with a grader and a blind side-by-side, for model swaps</dd></dl></div>
+    </div>
+  </section>
+
+  <section>
+    <p class="eyebrow">Hardware</p>
+    <h2>The suites only need an OpenAI-compatible API</h2>
+    <div class="hw">
+      <div class="box"><h3>Backends · how a target starts</h3>
+        <div class="chips"><span class="chip"><b>recipe-docker</b> · Spark recipe, image shipped to every rank</span><span class="chip"><b>command</b> · any start/stop command, local or ssh</span><span class="chip"><b>service</b> · systemd or launchd</span></div>
+        <p class="note">Declared per target in a private <code>lab.yaml</code>; nothing about a lab is in the kit.</p></div>
+      <div class="arrow">probe →</div>
+      <div class="box"><h3>Platforms · what gets recorded</h3>
+        <div class="chips"><span class="chip"><b>DGX Spark</b> · GB10, ring or switch</span><span class="chip"><b>RTX 6000</b> / NVIDIA · per-GPU clocks, temperature, memory</span><span class="chip"><b>Apple Silicon</b> · MLX, llama.cpp; memory pressure, thermal</span><span class="chip"><b>generic</b></span></div>
+        <p class="note">Examples: <code>lab.examples/apple-mlx.yaml</code>, <code>lab.examples/rtx6000-vllm.yaml</code>. Adding one is a function in <code>suites/probes.py</code>.</p></div>
+    </div>
+  </section>
+
+  <section>
+    <p class="eyebrow">First real run · 29 Oct 2026</p>
+    <h2>What a pairtest report looks like</h2>
+    <div class="proof">
+      <div class="box"><h3>Cut-in: a short question sent 3 s behind a cold 64K-token prompt</h3>
+        <p class="lede" style="font-size:13.5px;margin-top:4px">DeepSeek-V4.1-Flash-1017 on four Sparks, live build against the same build with the recipe's opt-in <code>TF_DS_PREFILL_YIELD=1</code>. Seconds to the first token, median of 3 rounds.</p>
+        <div class="bars">
+          <div class="bar"><span class="lab">short question · live</span><div class="track"><div class="fill" style="width:86%"></div></div><span class="v">17.3 s</span></div>
+          <div class="bar"><span class="lab">short question · yield on</span><div class="track"><div class="fill" style="width:2%"></div></div><span class="v">0.35 s</span></div>
+          <div class="bar"><span class="lab">long prompt · live</span><div class="track"><div class="fill" style="width:100%;opacity:.45"></div></div><span class="v">20.0 s</span></div>
+          <div class="bar"><span class="lab">long prompt · yield on</span><div class="track"><div class="fill" style="width:100%;opacity:.45"></div></div><span class="v">20.3 s</span></div>
+        </div></div>
+      <div class="box"><h3>The rest of the report</h3>
+        <table><tr><th>suite</th><th>result</th></tr>
+          <tr><td>smoke</td><td>OK on both: arithmetic, greedy repeat equal, stream matches</td></tr>
+          <tr><td>boundary</td><td class="n">19 of 19 reply hashes identical</td></tr>
+          <tr><td>restore</td><td>live configuration started again by the run itself</td></tr>
+          <tr><td>decision</td><td>yield switched on live the same evening (one setting, one restart)</td></tr></table></div>
+    </div>
+  </section>
+
+  <p class="foot">Credits: Mia's AI Lab (attribution and contribution rules), The Grill by plotarmordev (the baseline / control / check discipline behind the evidence rules), gb10-clock-cap by agjs (the agent-contract layout). The kit's own scripts, suites and evaluation set were written by Hector Isaza, generalised from testing and contributing to the DeepSeek-V4.1-Flash and GLM-5.3 recipes. Local repository; not yet published.</p>
+</div>

@@ -51,6 +51,7 @@ Produces: a run directory with a report.
     scripts/pairtest build --lab lab.yaml --target <name>         # build on the build box, stream to all serving boxes
     scripts/pairtest run   --lab lab.yaml --target <name> --suite smoke,boundary,soak --compare <baseline-target>
     scripts/pairtest restore --lab lab.yaml                       # put back what lab.yaml says is live
+    scripts/report.py runs/<time>                                 # (re)generate report.md, report.html and the charts
 
 Get the owner's go for the downtime first (what goes down, how long, the fallback). The `restore` step always runs,
 even when a suite fails. Compare against a control (the same build without your change), not against memory.
@@ -60,7 +61,12 @@ even when a suite fails. Compare against a control (the same build without your 
 Produces: the PR text, filled from `templates/PR.md` and the stage 3 report.
 
 Re-read every sentence against the evidence: numbers match the report, "identical" means hashes matched, and the
-"what the tests do not show" section is present. Follow the recipe's CHANGELOG and credits form. Then ask for the go.
+"what the tests do not show" section is present. Follow the recipe's CHANGELOG and credits form.
+
+Attach the run's visual documentation so reviewers can validate it without re-running anything: `pairtest run` leaves
+`report.md` (a markdown section with the charts as relative SVG images), `report.html` (one self-contained page) and the
+`.svg` files in the run directory. Copy the directory to `docs/evidence/<run>/` in the PR branch and link it from the PR
+body, or attach the files to the PR by hand; fill in the "what this run does not show" list. Then ask for the go.
 
 ## 5. Follow-up
 

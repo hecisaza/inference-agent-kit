@@ -44,7 +44,8 @@ export KIT=$PWD
 pkill -f 'fake_server.py 18611' 2>/dev/null; sleep 0.5
 r=$(python3 scripts/pairtest run --lab tests/lab-fake.yaml --target a --compare b --suite smoke,boundary --runs /tmp/selftest-runs 2>&1)
 rep=$(ls -dt /tmp/selftest-runs/2*/ 2>/dev/null | head -1)
-grep -q "smoke" "$rep/report.md" 2>/dev/null && grep -q "OK" "$rep/report.md" && grep -qE "a vs b.*: 19 of 19" "$rep/report.md" && ok "pairtest run (command backend, local fake server): $(grep -o 'a vs b.*' "$rep/report.md")" || bad "pairtest run: $(echo "$r" | tail -5)"
+grep -q "smoke" "$rep/summary.md" 2>/dev/null && grep -qE "a vs b.*: 19 of 19" "$rep/summary.md" && ok "pairtest run (command backend, local fake server): $(grep -o 'a vs b.*' "$rep/summary.md")" || bad "pairtest run: $(echo "$r" | tail -5)"
+[ -s "$rep/report.html" ] && grep -q "19 of 19" "$rep/report.md" && grep -q "does not show" "$rep/report.md" && ok "report.py wrote report.md + report.html with the hash comparison and the limits list" || bad "report.py output missing"
 curl -s -m 3 http://127.0.0.1:18611/v1/models | grep -q fake-model && ok "live restored after the run" || bad "live not restored"
 pkill -f 'fake_server.py 18611' 2>/dev/null; rm -rf /tmp/selftest-runs
 # every example lab parses and plans (dry)
