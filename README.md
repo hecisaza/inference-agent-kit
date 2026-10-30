@@ -1,4 +1,4 @@
-# spark-agent-kit
+# inference-agent-kit
 
 A standard way for AI coding agents (Claude Code, Codex, Grok and others) to contribute to local-inference serving
 stacks: DGX Spark recipes such as Mia's AI Lab's DeepSeek and GLM recipes first, and the same process on Apple Silicon,
@@ -14,14 +14,14 @@ The agent-contract layout follows [gb10-clock-cap](https://github.com/agjs/gb10-
 
 ## Quick start
 
-    git clone https://github.com/hecisaza/spark-agent-kit ~/spark-agent-kit && cd ~/spark-agent-kit
+    git clone https://github.com/hecisaza/inference-agent-kit ~/inference-agent-kit && cd ~/inference-agent-kit
     cp owner.example.yaml owner.yaml   # your name, commit email, time zone, attribution policy
     cp lab.example.yaml lab.yaml       # your Sparks: hosts, fabric, build box, what is live, targets
     scripts/install-skill.sh           # optional: the Claude Code skill
     tests/selftest.sh                  # checks the kit itself (no hardware needed)
 
-Then start your agent in the directory of the recipe you work on and tell it to follow `~/spark-agent-kit/AGENTS.md`
-(with Claude Code: `/spark-agent-work`).
+Then start your agent in the directory of the recipe you work on and tell it to follow `~/inference-agent-kit/AGENTS.md`
+(with Claude Code: `/inference-agent-work`).
 
 ## What is in it
 

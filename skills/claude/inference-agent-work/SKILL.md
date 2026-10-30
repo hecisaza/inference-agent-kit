@@ -1,11 +1,11 @@
 ---
-name: spark-agent-work
-description: Use when contributing to a DGX Spark serving recipe or its engine (Mia's AI Lab recipes such as MiaAI-Lab/DeepSeek-*-DGX-Sparks or GLM-*-DGX-Sparks, TensorFold): fixing a bug, porting a patch, testing a PR on hardware, reviewing someone's PR, or preparing PR text. Runs the spark-agent-kit process (intake, host tests and canaries, second-opinion review, hardware suites, PR text) with its approval gates.
+name: inference-agent-work
+description: Use when contributing to a DGX Spark serving recipe or its engine (Mia's AI Lab recipes such as MiaAI-Lab/DeepSeek-*-DGX-Sparks or GLM-*-DGX-Sparks, TensorFold): fixing a bug, porting a patch, testing a PR on hardware, reviewing someone's PR, or preparing PR text. Runs the inference-agent-kit process (intake, host tests and canaries, second-opinion review, hardware suites, PR text) with its approval gates.
 ---
 
-# spark-agent-work
+# inference-agent-work
 
-The kit lives at the path in `$SPARK_AGENT_KIT` (default `~/spark-agent-kit`). Read its `AGENTS.md` first and follow it:
+The kit lives at the path in `$INFERENCE_AGENT_KIT` (default `~/inference-agent-kit`). Read its `AGENTS.md` first and follow it:
 it is the contract (rules, Mia's attribution and contribution rules, the stages and their gates). Read `owner.yaml` and
 `lab.yaml` there for the owner's preferences and lab.
 

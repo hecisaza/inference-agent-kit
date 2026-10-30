@@ -5,7 +5,7 @@
 set -euo pipefail
 [[ $# -ge 1 && "$1" == */* ]] || { echo "usage: $0 OWNER/REPO [KEYWORD...]" >&2; exit 2; }
 REPO=$1; shift
-CACHE=${SYNC_CACHE:-$HOME/.cache/spark-agent-kit/repos}
+CACHE=${SYNC_CACHE:-$HOME/.cache/inference-agent-kit/repos}
 DIR="$CACHE/${REPO//\//__}"
 mkdir -p "$CACHE"
 if [[ -d "$DIR/.git" ]]; then git -C "$DIR" fetch -q origin; else git clone -q "https://github.com/$REPO.git" "$DIR"; fi
