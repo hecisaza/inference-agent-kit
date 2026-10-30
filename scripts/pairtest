@@ -5,7 +5,7 @@ and stopped) and its host names a platform (how it is probed); the suites only n
   pairtest plan    --lab lab.yaml --target T          what would happen; checks hosts, disk, artifacts; changes nothing
   pairtest build   --lab lab.yaml --target T          build T's artifact on build_host (backend-specific), then ship it
   pairtest ship    --lab lab.yaml --target T          copy T's artifact to every serving host and compare (docker images)
-  pairtest run     --lab lab.yaml --target T [--compare C] --suite smoke,boundary,soak,cutin,fault,bench [--opt k=v ...]
+  pairtest run     --lab lab.yaml --target T [--compare C] --suite smoke,boundary,soak,cutin,fault,repro,bench [--opt k=v ...]
                                                       stop what runs, start T (and C, counterbalanced A B / B A per rep), run the
                                                       suites, write runs/<time>/{results.json,report.md,report.html}, then stop the
                                                       last target and start what lab.yaml calls live: also on a failed suite, an
@@ -371,6 +371,7 @@ def cmd_run(lab, a):
                         r = {"ok": False, "skipped": "no bench_cmd"} if not cmd else {"ok": subprocess.run(cmd, shell=True).returncode == 0, "cmd": cmd}
                     else:
                         ctx = {"api": t["api"], "model": t["model"], "out": run, "opts": {**{"chunk": t.get("chunk", 2048)}, **opts}, "log": log,
+                               "role": "candidate" if name == names[0] else "control",
                                "target": t, "head": head, "hosts": list(lab.c["hosts"]), "ssh": lab.sh, "platform": lab.platform(head),
                                "restart": lambda t=t, name=name: sw.to(name, t), "sample": lambda t=t, h=head: {"head": lab.probe(h, t)}}
                         try:

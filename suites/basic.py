@@ -1,7 +1,7 @@
-"""smoke, boundary and cutin suites. Each run(ctx) returns a dict that pairtest writes to the report.
+"""smoke, boundary, cutin and repro suites. Each run(ctx) returns a dict that pairtest writes to the report.
 
 ctx: dict(api, model, out (run directory), opts (suite options from the command line), log (callable))."""
-import threading, time
+import subprocess, threading, time
 from common import chat, words
 
 
@@ -58,4 +58,24 @@ def cutin(ctx):
     return {"ok": not errs and all(x.get("short") is not None and x.get("long") is not None for x in res), "rounds": res, "errors": errs}
 
 
-SUITES = {"smoke": smoke, "boundary": boundary, "cutin": cutin}
+def repro(ctx):
+    """Runs an issue's reproduction command against the target (opts repro_cmd; {api} {model} {out} {role} are filled
+    in). Exit 0 means the problem does not show, anything else means it does. The suite is ok when the result is what
+    the target's role predicts: the control (the base) shows the problem, the candidate (the fix) does not."""
+    cmd = ctx["opts"].get("repro_cmd")
+    if not cmd:
+        return {"ok": False, "skipped": "no repro_cmd (pass --opt repro_cmd='bash tests/repro-issue-N.sh {api} {model}')"}
+    role = ctx.get("role", "candidate")
+    full = cmd
+    for k, v in (("{api}", ctx["api"]), ("{model}", ctx["model"]), ("{out}", ctx["out"]), ("{role}", role)):
+        full = full.replace(k, str(v))
+    try:
+        p = subprocess.run(full, shell=True, capture_output=True, text=True, timeout=float(ctx["opts"].get("repro_timeout_s", 1800)))
+        rc, out = p.returncode, p.stdout + p.stderr
+    except subprocess.TimeoutExpired as e:
+        rc, out = -1, f"timeout after {e.timeout} s\n" + ((e.stdout or b"").decode(errors="ignore") if isinstance(e.stdout, bytes) else (e.stdout or ""))
+    shows = rc != 0
+    return {"ok": shows == (role == "control"), "role": role, "exit": rc, "shows_problem": shows, "cmd": cmd, "output_tail": out[-2000:]}
+
+
+SUITES = {"smoke": smoke, "boundary": boundary, "cutin": cutin, "repro": repro}

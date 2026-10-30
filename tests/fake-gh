@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+# fake-gh: stands in for gh in the self-test. Records every call in FAKE_GH_LOG and answers the few commands
+# issue-agent.sh uses with canned output; nothing reaches GitHub.
+echo "gh $*" >> "${FAKE_GH_LOG:?set FAKE_GH_LOG}"
+case "${1:-} ${2:-}" in
+  "issue view") echo '{"title":"17*23 is answered wrongly","body":"The server replies 392 to 17*23.","comments":[{"author":{"login":"someone"},"body":"Same here."}],"author":{"login":"tester"},"url":"https://github.com/o/r/issues/7"}';;
+  "pr create") echo "https://github.com/o/r/pull/99";;
+  "issue comment") ;;
+  *) ;;
+esac

@@ -12,10 +12,11 @@ reply. The "what this run does not show" section lists the suites that did not r
 complete."""
 import argparse, html, json, os, re, statistics
 
-ALL_SUITES = ("smoke", "boundary", "cutin", "soak", "fault", "bench")
+ALL_SUITES = ("smoke", "boundary", "cutin", "soak", "fault", "repro", "bench")
 NOT_SHOWN = {"smoke": "basic answers, greedy repeat equality and streaming", "boundary": "reply equality at chunk ends and prefix-cache cases",
              "cutin": "a short request's first-token time behind a cold long prompt", "soak": "errors, canary mismatches and resource growth over time with client aborts",
-             "fault": "a clean pair exit and recovery after an injected read fault", "bench": "throughput and latency against a control"}
+             "fault": "a clean pair exit and recovery after an injected read fault", "bench": "throughput and latency against a control",
+             "repro": "whether the issue's reproduction command shows the problem on the control and not on the candidate"}
 HASH = re.compile(r"^[0-9a-f]{12}$")
 
 
@@ -139,6 +140,27 @@ def main():
                             md.append(f"| `{cell(n)}` | {cell(c.get('case'))} | error: {cell(c['error'])} | | | | |"); continue
                         md.append(f"| `{cell(n)}` | {cell(c['case'])} | {tick(c['request_failed'])} | {cell(c['head'])} {tick(c['exit_ok'])} | {c.get('head_exit_s', c.get('head_s'))} | {cell(c['others'])} | {tick(c['reference_equal_after_restart'])}{(' (' + cell(c['after_error']) + ')') if c.get('after_error') else ''} |")
             md.append("\nRestarts between cases were made by the test harness, not by a supervisor.")
+        elif s == "repro":
+            md.append("| target | role | exit | shows the problem | expected | as expected |\n|---|---|---|---|---|---|")
+            got = {}
+            for n in names:
+                for r in R[s].get(n, []):
+                    if r.get("skipped"):
+                        md.append(f"| `{cell(n)}` | skipped: {cell(r['skipped'])} | | | | |"); continue
+                    got.setdefault(n, r)
+                    md.append(f"| `{cell(n)}` | {cell(r.get('role'))} | {r.get('exit')} | {tick(r.get('shows_problem'))} | {'shows it' if r.get('role') == 'control' else 'does not show it'} | {tick(r.get('ok'))} |")
+            c, k = got.get(cand), got.get(ctrl)
+            if c and k:
+                if k["shows_problem"] and not c["shows_problem"]: md.append("\n**Reproduced on the control and gone on the candidate.**")
+                elif not k["shows_problem"]: md.append("\n**Not reproduced on the control**: the problem did not show on the base, so this run cannot say that the candidate fixes it.")
+                else: md.append("\n**Still present on the candidate.**")
+            elif c:
+                md.append("\n" + ("**The problem does not show on the candidate** (no control in this run)." if not c["shows_problem"] else "**The problem shows on the candidate.**"))
+            if got:
+                md.append(f"\nCommand: `{cell(next(iter(got.values())).get('cmd', ''))}`\n")
+                md.append("<details><summary>output of the reproduction command (tail)</summary>\n")
+                for n, r in got.items(): md.append(f"- `{cell(n)}`: `{cell(r.get('output_tail', '')[-600:]) or '(no output)'}`")
+                md.append("\n</details>")
         elif s == "bench":
             for n in names:
                 for r in R[s].get(n, []):
@@ -152,7 +174,7 @@ def main():
 
     # ---- limits
     skipped = [(s, r.get("skipped")) for s in R for n in R[s] for r in R[s][n] if r.get("skipped")]
-    missing = [s for s in ALL_SUITES if s not in R]
+    missing = [s for s in ALL_SUITES if s not in R and s != "repro"]  # repro only exists when an issue is being fixed
     md.append("#### What this run does not show\n")
     for s in missing: md.append(f"- {NOT_SHOWN[s]} (`{s}` did not run)")
     for s, why in dict(skipped).items(): md.append(f"- {NOT_SHOWN[s]} (`{s}` was skipped: {cell(why)})")

@@ -75,6 +75,30 @@ r=$(python3 scripts/pairtest build --lab tests/lab-fake.yaml --target img --dry 
 r=$(python3 scripts/pairtest run --lab tests/lab-fake.yaml --target bad --suite smoke --runs /tmp/selftest-runs 2>&1); rc=$?
 [ "$rc" = 1 ] && echo "$r" | grep -q "NOT OK: bad/smoke" && ok "a failing suite gives exit 1 and names the suite" || bad "failing suite: rc=$rc"
 curl -s -m 3 http://127.0.0.1:18611/v1/models | grep -q fake-model && ok "live restored after the failing run" || bad "live not restored after the failing run"
+# repro suite: the control (bad: wrong arithmetic) shows the problem, the candidate (a) does not -> ok; the other way round -> exit 1
+r=$(python3 scripts/pairtest run --lab tests/lab-fake.yaml --target a --compare bad --suite repro --opt "repro_cmd=bash tests/fake-repro.sh {api} {model}" --runs /tmp/selftest-runs 2>&1); rc=$?
+rep=$(ls -dt /tmp/selftest-runs/2*/ 2>/dev/null | head -1)
+[ "$rc" = 0 ] && grep -q "Reproduced on the control and gone on the candidate" "$rep/report.md" 2>/dev/null && ok "repro suite: reproduced on the control, gone on the candidate (exit 0)" || bad "repro suite: rc=$rc $(echo "$r" | tail -3)"
+r=$(python3 scripts/pairtest run --lab tests/lab-fake.yaml --target bad --compare a --suite repro --opt "repro_cmd=bash tests/fake-repro.sh {api} {model}" --runs /tmp/selftest-runs 2>&1); rc=$?
+rep=$(ls -dt /tmp/selftest-runs/2*/ 2>/dev/null | head -1)
+[ "$rc" = 1 ] && echo "$r" | grep -q "NOT OK: bad/repro" && grep -q "Not reproduced on the control" "$rep/report.md" && ok "repro suite: the inverse (candidate shows it, control does not) fails the run and says the control did not reproduce" || bad "repro suite inverse: rc=$rc"
+# issue-agent.sh with a fake agent and a fake gh: a local bare "origin", the live build = the bad server (shows the problem)
+nohup python3 tests/fake_server.py 18612 --wrong > /dev/null 2>&1 &
+badpid=$!; sleep 0.7
+ia=$(mktemp -d); mkdir -p "$ia/bin"; install -m 755 tests/fake-gh "$ia/bin/gh"
+git init -q --bare "$ia/origin.git"; git clone -q "$ia/origin.git" "$ia/seed" 2>/dev/null; echo "# seed" > "$ia/seed/README.md"
+git -C "$ia/seed" add README.md; git -C "$ia/seed" -c user.name=seed -c user.email=seed@example.com commit -q -m seed; git -C "$ia/seed" push -q origin HEAD:main 2>/dev/null; git -C "$ia/origin.git" symbolic-ref HEAD refs/heads/main
+iarun() { FAKE_GH_LOG="$ia/gh.log" PATH="$ia/bin:$PATH" CLONE_URL="$ia/origin.git" AGENT_CMD="bash $PWD/tests/fake-agent.sh" LIVE_MODEL=fake-model GH_TOKEN=should-not-reach-the-agent bash scripts/issue-agent.sh "$@" --repo o/r --work "$ia/work" 2>&1; }
+: > "$ia/gh.log"
+r=$(LIVE_API=http://127.0.0.1:18612/v1 iarun https://github.com/o/r/issues/7); rc=$?
+[ "$rc" = 0 ] && grep -q "RESULT: pr https://github.com/o/r/pull/99" <<<"$r" && grep -q "pr create -R o/r --head agent/issue-7 --title fix: issue 7 (fake) --body-file body.md --label test" "$ia/gh.log" && git -C "$ia/origin.git" rev-parse -q --verify agent/issue-7 >/dev/null && grep -q "Closes #7" "$ia/work/o-r-7/body.md" && ok "issue-agent: reproduced -> branch pushed, PR opened with the test label, no token for the agent" || bad "issue-agent reproduced: rc=$rc $(tail -3 <<<"$r")"
+: > "$ia/gh.log"
+r=$(LIVE_API=http://127.0.0.1:18611/v1 iarun https://github.com/o/r/issues/7); rc=$?
+[ "$rc" = 0 ] && grep -q "RESULT: unclear (comment posted" <<<"$r" && grep -q "issue comment" "$ia/gh.log" && ! grep -q "pr create" "$ia/gh.log" && ok "issue-agent: a repro script that does not show the problem on live downgrades to unclear, no PR" || bad "issue-agent downgrade: rc=$rc $(tail -3 <<<"$r")"
+: > "$ia/gh.log"
+r=$(FAKE_AGENT_VERDICT=not-reproduced LIVE_API=http://127.0.0.1:18612/v1 iarun https://github.com/up/stream/issues/3); rc=$?
+[ "$rc" = 0 ] && grep -q "RESULT: not-reproduced (draft comment at" <<<"$r" && ! grep -q "issue comment\|pr create" "$ia/gh.log" && [ -s "$ia/work/up-stream-3/COMMENT.md" ] && ok "issue-agent: not reproduced on an upstream issue -> draft comment only, nothing posted" || bad "issue-agent upstream: rc=$rc $(tail -3 <<<"$r")"
+kill "$badpid" 2>/dev/null; rm -rf "$ia"
 # --dry: no command runs and no request is sent (no server is up for a's port after this stop)
 pkill -f "fake_server.py 18611" 2>/dev/null; sleep 0.5
 r=$(python3 scripts/pairtest run --lab tests/lab-fake.yaml --target a --suite smoke,cutin --runs /tmp/selftest-runs --dry 2>&1); rc=$?
