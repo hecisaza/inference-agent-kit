@@ -48,13 +48,13 @@ Nothing about your lab is in the kit: `lab.yaml` and `owner.yaml` stay local (`.
 
 ```mermaid
 flowchart LR
-  S0["0 Intake<br/>sync.sh"] -->|owner confirms scope + base| S1["1 Build + host tests<br/>canary.py"]
-  S1 -->|tests pass, every fix caught| S2["2 Review<br/>review.sh"]
-  S2 -->|no open P1| S3["3 Hardware<br/>pairtest + report.py"]
-  S3 -->|report clean or understood| S4["4 Pull request<br/>templates/PR.md"]
-  S4 -->|merged or closed| S5["5 Follow-up"]
-  O((owner's go)) -.->|downtime| S3
-  O -.->|push, PR, comment| S4
+  S0["0 Intake<br/>sync.sh"] -->|"owner confirms scope and base"| S1["1 Build and host tests<br/>canary.py"]
+  S1 -->|"tests pass, every fix caught"| S2["2 Review<br/>review.sh"]
+  S2 -->|"no open P1"| S3["3 Hardware<br/>pairtest, report.py"]
+  S3 -->|"report clean or understood"| S4["4 Pull request<br/>templates/PR.md"]
+  S4 -->|"merged or closed"| S5["5 Follow-up"]
+  OWNER(("owner approves")) -.->|"downtime"| S3
+  OWNER -.->|"push, PR, comment"| S4
 ```
 
 `docs/overview.html` is the same picture as one page (stages, layers, hardware, a sample report).
