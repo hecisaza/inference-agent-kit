@@ -50,6 +50,17 @@ rep=$(ls -dt /tmp/selftest-runs/2*/ 2>/dev/null | head -1)
 grep -q "candidate" "$rep/report.md" && grep -q "Restore: live restored" "$rep/report.md" && [ -s "$rep/report.html" ] && grep -q "does not show" "$rep/report.md" && ok "report.py: candidate/control from meta, restore recorded, limits list, html written" || bad "report.py output incomplete"
 curl -s -m 3 http://127.0.0.1:18611/v1/models | grep -q fake-model && ok "live restored after the run" || bad "live not restored"
 curl -s -m 2 http://127.0.0.1:18612/v1/models >/dev/null 2>&1 && bad "the tested target (port 18612) was left running" || ok "the tested target was stopped before live was restored"
+# the recipe-docker running() check reads image: or env.IMAGE, and is unknown (None) without either
+python3 - <<'PY' && ok "RecipeDocker.running: image:, env.IMAGE, none" || bad "RecipeDocker.running"
+import importlib.machinery, types
+m = importlib.machinery.SourceFileLoader("pairtest", "scripts/pairtest").load_module()
+lab = types.SimpleNamespace(sh=lambda host, cmd: "abc123\n" if "ancestor=x:1" in cmd else "", dry=False)
+be = m.RecipeDocker(lab)
+assert be.running({"head": "h", "image": "x:1"}) is True
+assert be.running({"head": "h", "env": {"IMAGE": "x:1"}}) is True
+assert be.running({"head": "h", "image": "y:2"}) is False
+assert be.running({"head": "h"}) is None
+PY
 # restore is a no-op while live is up (same server process afterwards), and starts live when it is down
 pid=$(pgrep -f "fake_server.py 18611" | head -1)
 r=$(python3 scripts/pairtest restore --lab tests/lab-fake.yaml 2>&1)

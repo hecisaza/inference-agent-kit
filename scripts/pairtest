@@ -143,8 +143,11 @@ class RecipeDocker:
         self.lab.sh(self.lab.c["build_host"], f"cd {rpath(b['recipe_checkout'])} && IMAGE={shlex.quote(t['image'])} {b['command']}", check=True)
 
     def running(self, t):
-        """True when a container from the target's image runs on its head (False without an image: nothing to compare)."""
-        return bool(t.get("image")) and bool(self.lab.sh(t["head"], f"docker ps -q --filter ancestor={shlex.quote(t['image'])}").strip())
+        """True when a container from the target's image (image:, or IMAGE in its env) runs on its head; None without an image."""
+        img = t.get("image") or (t.get("env") or {}).get("IMAGE")
+        if not img:
+            return None
+        return bool(self.lab.sh(t["head"], f"docker ps -q --filter ancestor={shlex.quote(str(img))}").strip())
 
     def ship(self, t):
         lab = self.lab
