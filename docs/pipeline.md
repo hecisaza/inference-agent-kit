@@ -54,7 +54,9 @@ sandbox. Give it issues you would give a new contributor with the same access.
    `prepare.sh` does (same patch hash). The workflow passes `CHECKOUT` per target.
 3. The runner: GitHub's self-hosted runner on a host with SSH to the lab, labels `self-hosted,spark-lab`, registered on
    the fork. Install it as a service so it survives a reboot: in the runner directory, `sudo ./svc.sh install <user>`
-   then `sudo ./svc.sh start` (a plain `./run.sh` dies with the shell).
+   then `sudo ./svc.sh start` (a plain `./run.sh` dies with the shell). One runner with that label is what serializes
+   the lab: it takes one job at a time and GitHub queues the rest. Do not add a `concurrency` group for this: a group
+   keeps a single pending run and cancels every other one that arrives while a run is in progress.
 4. The two workflow files on the fork's default branch, with the author allowlist, the lab addresses and the live model
    edited for the lab. `pull_request_target` reads the workflow from the default branch, so changes to it go there.
 5. For the issue workflow, the agent command on the runner host: the default is Claude Code headless
