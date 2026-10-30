@@ -24,7 +24,7 @@ targets:
     host: mac
     cwd: ~/llama.cpp
     start: "nohup ./build/bin/llama-server -m ~/models/qwen3.8-27b-q4_k_m.gguf -c 32768 -ngl 99 --port 8081 > ~/llama.log 2>&1 &"
-    stop: "pkill -f llama-server || true"
+    stop: "pkill -f llama-server || true"   # required: pairtest stops a target before it hands over
     api: http://127.0.0.1:8081/v1
     model: qwen3.8-27b-q4_k_m
     chunk: 2048                 # -b / --batch-size

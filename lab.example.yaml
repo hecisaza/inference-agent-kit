@@ -39,4 +39,6 @@ targets:
 
 # Who uses the live model (said in every downtime request)
 users: "OpenClaw agents (fallback: cloud model), Nashira"
+# environment keys that may appear in a shareable report (regex); everything else stays in the local log
+public_env: "^(TF_|TENSORFOLD_|VLLM_|LLAMA_|MLX_|CUDA_VISIBLE_DEVICES$)"
 min_free_gb: 60                          # refuse to ship an image onto a box with less free disk

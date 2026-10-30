@@ -22,12 +22,12 @@ else
 fi
 echo
 echo "== open pull requests"
-gh pr list -R "$REPO" --state open --limit 50 --json number,author,title,updatedAt,mergeable \
+gh pr list -R "$REPO" --state open --limit 200 --json number,author,title,updatedAt,mergeable \
   -q '.[] | "#\(.number)\t\(.updatedAt[:10])\t\(.author.login)\t\(.mergeable)\t\(.title[:80])"' | column -t -s $'\t' || true
 echo
 echo "== patch files touched by open pull requests"
 tmp=$(mktemp); trap 'rm -f "$tmp"' EXIT
-for n in $(gh pr list -R "$REPO" --state open --limit 50 --json number -q '.[].number'); do
+for n in $(gh pr list -R "$REPO" --state open --limit 200 --json number -q '.[].number'); do
   gh pr view "$n" -R "$REPO" --json files -q '.files[].path' 2>/dev/null | sed -n 's#^zig/patches/\([0-9]\{4\}\)-\(.*\)#\1 \2#p' | while read -r num name; do
     printf '%s\t#%s\t%s\n' "$num" "$n" "$name"; done
 done | sort > "$tmp"
@@ -36,7 +36,9 @@ if [[ -s "$tmp" ]]; then
   echo
   dup=$(cut -f1 "$tmp" | sort | uniq -d)
   for d in $dup; do echo "COLLISION: patch $d is added by $(awk -F'\t' -v d="$d" '$1==d{print $2}' "$tmp" | sort -u | tr '\n' ' ')"; done
-  for d in $(cut -f1 "$tmp" | sort -u); do echo "$nums" | grep -qx "$d" && echo "NOTE: open PR changes or reuses $d, which is already on $BR: $(awk -F'\t' -v d="$d" '$1==d{print $2" "$3}' "$tmp" | sort -u | tr '\n' ' ')"; done
+  for d in $(cut -f1 "$tmp" | sort -u); do echo "$nums" | grep -qx "$d" && echo "NOTE: open PR touches $d, which is already on $BR (a change to it, or a number clash): $(awk -F'\t' -v d="$d" '$1==d{print $2" "$3}' "$tmp" | sort -u | tr '\n' ' ')"; done
+  hi=$( (echo "$nums"; cut -f1 "$tmp") | sort -u | tail -1 )
+  printf 'next free counting open PRs: %04d\n' $((10#$hi + 1))
   true
 else
   echo "(none)"

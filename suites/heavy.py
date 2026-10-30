@@ -1,6 +1,6 @@
 """soak and fault suites (see suites/basic.py for the ctx contract; these also use ctx['ssh'], ctx['hosts'],
 ctx['restart'] and ctx['target'])."""
-import json, random, socket, threading, time, urllib.request
+import http.client, json, random, threading, time, urllib.parse
 from common import chat, words
 
 
@@ -14,12 +14,14 @@ def soak(ctx):
     ref = chat(api, model, canary_q, max_tokens=48).get("sha")
     st = {"ok": 0, "abort": 0, "err": 0, "canary": 0, "canary_bad": 0}; errs = []; lock = threading.Lock(); samples = []
 
+    u = urllib.parse.urlsplit(api.rstrip("/") + "/chat/completions")
+
     def abort_after(text, delay):
-        host, port = api.split("//")[1].split("/")[0].split(":"); body = json.dumps({"model": model, "messages": [{"role": "user", "content": text}],
-                                                                                   "max_tokens": 32, "stream": True}).encode()
-        s = socket.create_connection((host, int(port)), timeout=30)
-        s.sendall(b"POST /v1/chat/completions HTTP/1.1\r\nHost: x\r\nContent-Type: application/json\r\nContent-Length: %d\r\n\r\n" % len(body) + body)
-        time.sleep(delay); s.close()
+        """Opens the request, waits `delay` s while the server reads the prompt, then drops the connection."""
+        body = json.dumps({"model": model, "messages": [{"role": "user", "content": text}], "max_tokens": 32, "stream": True}).encode()
+        C = http.client.HTTPSConnection if u.scheme == "https" else http.client.HTTPConnection
+        c = C(u.hostname, u.port, timeout=30); c.request("POST", u.path, body, {"Content-Type": "application/json"})
+        time.sleep(delay); c.close()
 
     def worker(w):
         r = random.Random(w)
@@ -64,21 +66,24 @@ def fault(ctx):
     c = f["container"]; trig = f.get("trigger_path", "/tmp/engram-fault"); want = int(f.get("exit_status", 75)); res = []
     ref_q = [{"role": "user", "content": words(3000, 7)}]
     for k, case in enumerate(f["cases"]):
-        ctx["restart"](); base = chat(api, model, ref_q, max_tokens=32).get("sha")
+        ctx["restart"](); b0 = chat(api, model, ref_q, max_tokens=32); base = b0.get("sha")
+        if b0.get("error"):
+            res.append({"case": case, "error": "reference request failed before the fault: " + b0["error"]}); continue
         ctx["ssh"](case["host"], f"docker exec {c} sh -c 'echo {case.get('site', '')} > {trig}'")
-        t0 = time.time(); r = chat(api, model, [{"role": "user", "content": words(9000, 1000 + k)}], max_tokens=16, timeout=600)
-        head = ctx["head"]; status = ""
-        while time.time() - t0 < 300:
+        t0 = time.time(); r = chat(api, model, [{"role": "user", "content": words(9000, 1000 + k)}], max_tokens=16, timeout=300)
+        head = ctx["head"]; status = ""; t1 = time.time()
+        while time.time() - t1 < 300:  # the exit is watched for up to 300 s after the request returned, whatever it took
             status = ctx["ssh"](head, f"docker inspect -f '{{{{.State.Status}}}} {{{{.State.ExitCode}}}}' {c} 2>/dev/null || echo gone").strip()
             if status.startswith("exited") or status == "gone":
                 break
             time.sleep(2)
         others = {h: ctx["ssh"](h, f"docker inspect -f '{{{{.State.Status}}}} {{{{.State.ExitCode}}}}' {c} 2>/dev/null || echo gone").strip() for h in ctx["hosts"] if h != head}
-        ctx["restart"](); after = chat(api, model, ref_q, max_tokens=32).get("sha")
-        row = {"case": case, "request_failed": bool(r.get("error")), "head": status, "head_s": round(time.time() - t0, 1), "others": others,
-               "reference_equal_after_restart": after == base, "exit_ok": status == f"exited {want}"}
+        exited_s = round(time.time() - t0, 1)
+        ctx["restart"](); a0 = chat(api, model, ref_q, max_tokens=32); after = a0.get("sha")
+        row = {"case": case, "request_failed": bool(r.get("error")), "head": status, "head_exit_s": exited_s, "others": others,
+               "reference_equal_after_restart": bool(after) and after == base, "after_error": a0.get("error"), "exit_ok": status == f"exited {want}"}
         res.append(row); ctx["log"](f"fault {row}")
-    return {"ok": all(x["request_failed"] and x["exit_ok"] and x["reference_equal_after_restart"] for x in res), "cases": res}
+    return {"ok": bool(res) and all(x.get("request_failed") and x.get("exit_ok") and x.get("reference_equal_after_restart") for x in res), "cases": res}
 
 
 SUITES = {"soak": soak, "fault": fault}

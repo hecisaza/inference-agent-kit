@@ -10,7 +10,7 @@ performance claim that will go into a pull request.
 1. **Baseline, control, check.** Measure the unchanged build (baseline), measure it again with nothing changed
    (control, which shows the noise), then measure your change (check). A difference smaller than the control's spread is
    not a result.
-2. **Alternate, do not batch.** A1, B1, A2, B2: drift (temperature, clocks, other load) then hits both sides.
+2. **Alternate, do not batch.** A B, then B A (counterbalanced): drift (temperature, clocks, other load) then hits both sides.
 3. **Record conditions**: GPU clock and temperature at start, concurrent load (agents, other clients), cache state
    (cold or warm), engine settings, image id.
 4. **Verdict words** (Grill vocabulary): MEASURED FASTER / MEASURED SLOWER only with a control and a difference beyond

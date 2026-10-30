@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """A tiny OpenAI-compatible server for the kit's self-test: deterministic replies, streaming, usage. Not a model.
-Usage: fake_server.py PORT  (serves /v1/models and /v1/chat/completions; replies depend only on the last user text)."""
+Usage: fake_server.py PORT [--wrong]  (serves /v1/models and /v1/chat/completions; replies depend only on the last user
+text; --wrong answers arithmetic wrongly, for the self-test's failing-suite case)."""
 import hashlib, json, sys, time
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
@@ -8,7 +9,7 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 def reply(text):
     t = text.lower()
     if "17*23" in t.replace(" ", "") or "17 times 23" in t:
-        return "391"
+        return "392" if "--wrong" in sys.argv else "391"
     if "colour" in t or "color" in t:
         return "red, green, blue"
     return "ok " + hashlib.sha256(text.encode()).hexdigest()[:8]

@@ -1,4 +1,6 @@
 # Self-test lab: the command backend on the local machine against tests/fake_server.py (no hardware, no ssh).
+# live and a: port 18611. b: port 18612, so the self-test can check that b is stopped when live is restored.
+# bad: answers wrongly, so the self-test can check that a failing suite fails the run.
 hosts:
   here: { local: true, platform: generic }
 
@@ -17,6 +19,10 @@ targets:
     inherit: live
     chunk: 8
   b:
-    inherit: live
-    start: "nohup python3 $KIT/tests/fake_server.py 18611 > /tmp/fake-b.log 2>&1 &"
-    chunk: 8
+    inherit: a
+    start: "nohup python3 $KIT/tests/fake_server.py 18612 > /tmp/fake-b.log 2>&1 &"
+    stop: "pkill -f 'fake_server.py 18612' || true"
+    api: http://127.0.0.1:18612/v1
+  bad:
+    inherit: b
+    start: "nohup python3 $KIT/tests/fake_server.py 18612 --wrong > /tmp/fake-bad.log 2>&1 &"

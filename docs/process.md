@@ -53,8 +53,11 @@ Produces: a run directory with a report.
     scripts/pairtest restore --lab lab.yaml                       # put back what lab.yaml says is live
     scripts/report.py runs/<time>                                 # (re)generate report.md, report.html and the charts
 
-Get the owner's go for the downtime first (what goes down, how long, the fallback). The `restore` step always runs,
-even when a suite fails. Compare against a control (the same build without your change), not against memory.
+Get the owner's go for the downtime first (what goes down, how long, the fallback). `run` stops the target it tested
+and starts the live configuration at the end, also after a failed suite, an exception, Ctrl-C or SIGTERM, and records
+the outcome in the report; its exit status is 1 when any suite was not ok or the restore or report failed. Compare
+against a control (the same build without your change), not against memory. With more than one repetition the order
+is counterbalanced (A B, then B A), so drift hits both sides.
 
 ## 4. Pull request
 
@@ -63,10 +66,12 @@ Produces: the PR text, filled from `templates/PR.md` and the stage 3 report.
 Re-read every sentence against the evidence: numbers match the report, "identical" means hashes matched, and the
 "what the tests do not show" section is present. Follow the recipe's CHANGELOG and credits form.
 
-Attach the run's visual documentation so reviewers can validate it without re-running anything: `pairtest run` leaves
-`report.md` (a markdown section with the charts as relative SVG images), `report.html` (one self-contained page) and the
-`.svg` files in the run directory. Copy the directory to `docs/evidence/<run>/` in the PR branch and link it from the PR
-body, or attach the files to the PR by hand; fill in the "what this run does not show" list. Then ask for the go.
+Prepare the run's visual documentation so reviewers can validate it without re-running anything: `pairtest run`
+leaves `report.md` (a markdown section with the charts as relative SVG images), `report.html` (one self-contained page)
+and the `.svg` files in the run directory. Copy **only those** (not `results.json` or `log.txt`, which hold local
+detail) to `docs/evidence/<run>/` in the local PR branch, link it from the PR body, and fill in the "what this run does
+not show" list. All of this is still local. Then ask for the go: the push that makes the branch, its evidence and the
+PR public is the gated action.
 
 ## 5. Follow-up
 

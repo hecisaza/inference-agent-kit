@@ -1,5 +1,8 @@
 # score.py A B: automatic grading of out-A.jsonl and out-B.jsonl, plus blind-A-B.json, a shuffled side-by-side of the
 # open-ended answers to judge before looking at the key. Read every failed item before reporting a score: graders are strict.
+# Model-written code is executed in a docker sandbox (python:3.12-slim, no network, read-only, unprivileged user, 256 MB);
+# AGENT26_SANDBOX=unsafe-local runs it on this machine instead, only for a throwaway machine. Scratch files go under
+# ~/.cache/inference-agent-kit/sandbox (AGENT26_TMP) because a snap-installed docker cannot mount /tmp.
 import sys, json, re, subprocess, tempfile, os, random
 A, B = sys.argv[1], sys.argv[2]
 def load(l): return {r["id"]: r for r in map(json.loads, open(f"out-{l}.jsonl"))}
@@ -15,12 +18,36 @@ def text(r): return (r.get("content") or "").strip()
 def code(r):
     m = re.findall(r"```(?:python)?\n(.*?)```", text(r), re.S)
     return max(m, key=len) if m else text(r)
+SANDBOX = os.environ.get("AGENT26_SANDBOX", "docker")  # docker (default) | unsafe-local (only for a throwaway machine)
+NONCE = "OK-" + os.urandom(8).hex()
+
+
 def runpy(src, tests):
-    with tempfile.TemporaryDirectory() as d:
-        p = os.path.join(d, "t.py"); open(p, "w").write(src + "\n\n" + tests + "\nprint('ALLOK')\n")
-        try: o = subprocess.run(["python3", "-I", p], capture_output=True, text=True, timeout=20, cwd=d)
-        except subprocess.TimeoutExpired: return False
-        return "ALLOK" in o.stdout
+    """Runs model-written code plus the hidden tests in an isolated container (no network, read-only, 20 s, 256 MB)
+    and accepts only a clean exit that printed this process's random nonce as its last line: a program cannot pass by
+    printing a known marker, catching the assertion, or exiting with an error. With AGENT26_SANDBOX=unsafe-local the
+    code runs on this machine instead: do that only on a throwaway machine."""
+    # the scratch directory lives under the home directory (a tempfile under /tmp is invisible to a snap-installed docker),
+    # readable by the sandbox's unprivileged user through the read-only mount
+    base = os.environ.get("AGENT26_TMP", os.path.expanduser("~/.cache/inference-agent-kit/sandbox")); os.makedirs(base, exist_ok=True)
+    with tempfile.TemporaryDirectory(dir=base) as d:
+        os.chmod(d, 0o755)
+        open(os.path.join(d, "t.py"), "w").write(src + "\n\n" + tests + f"\nprint({NONCE!r})\n"); os.chmod(os.path.join(d, "t.py"), 0o644)
+        if SANDBOX == "unsafe-local":
+            cmd = ["python3", "-I", os.path.join(d, "t.py")]
+        else:
+            # (no `--security-opt no-new-privileges`: some kernels refuse its seccomp filter; the unprivileged user,
+            # dropped capabilities, no network and the read-only mount are the isolation)
+            cmd = ["docker", "run", "--rm", "--network", "none", "--read-only", "--memory", "256m", "--pids-limit", "64", "--cap-drop", "ALL",
+                   "--user", "65534:65534", "-v", f"{d}:/w:ro", "python:3.12-slim", "python3", "-I", "/w/t.py"]
+        try:
+            o = subprocess.run(cmd, capture_output=True, text=True, timeout=60 if SANDBOX != "unsafe-local" else 20)
+        except (subprocess.TimeoutExpired, FileNotFoundError):
+            return False
+        lines = o.stdout.strip().splitlines()
+        return o.returncode == 0 and bool(lines) and lines[-1] == NONCE
+
+
 IFACES = """Interface              IP-Address      OK? Method Status                Protocol
 GigabitEthernet0/0     10.0.0.1        YES manual up                    up
 GigabitEthernet0/1     unassigned      YES unset  administratively down down

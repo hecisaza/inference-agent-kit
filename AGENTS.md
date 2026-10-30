@@ -16,8 +16,11 @@ serves) is in `lab.yaml` (copy `lab.example.yaml`). Neither file is committed.
 2. **Contributions go out under the owner's name.** Commits and PR text carry the owner's identity from `owner.yaml`.
    Add agent attribution (trailers, "generated with" lines) only if `owner.yaml` says so.
 3. **Mia's contribution rules** (as Mia has asked contributors):
-   - Nothing is announced or posted about work on a recipe until every related pull request is merged.
-   - Tell the maintainer about related pull requests together, before or as they are opened, not one at a time.
+   - Nothing is *announced* (a post, a thread, a public write-up) about work on a recipe until every related pull
+     request is merged. Pull requests, issues and review comments on the maintainer's repository are not announcements:
+     they are how the work is done, and each still needs the owner's go (rule 1).
+   - Tell the maintainer about related pull requests together, before or as they are opened, not one at a time (a
+     private message, or the first PR's text naming the others).
    - Do not let several open pull requests edit the same spot of `CHANGELOG.md` (or the patches table): put one
      combined entry in the last one, stack the branches, or say in each body which ones touch the same lines.
    - A long-lived engine branch the maintainer keeps separate (for example GLM's `zig-engine`) is never merged or
@@ -66,7 +69,9 @@ Before saying the work is done, re-read the changed files from disk, or the pull
 2. The name is above the install steps on the first screen.
 3. The credits section still contains every name that was there before.
 4. The words "informed" and "inspired" are gone from that credit.
-5. The diff touches only the text files for the credit. Scripts, model ids, defaults, and git history are unchanged.
+5. For a change that is only a credit: the diff touches only the text files for the credit. Scripts, model ids,
+   defaults, and git history are unchanged. (A code contribution that brings in someone's work credits it in the same
+   PR; that PR's code diff is its own.)
 6. Each repo that had the same omission has its own commit or pull request.
 
 If any line fails, fix it and read the file again. Do not report success from memory of the edit.

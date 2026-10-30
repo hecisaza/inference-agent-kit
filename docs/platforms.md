@@ -17,10 +17,14 @@ how a server is started and stopped (the **backend**) and what is worth recordin
   `api`, `model`; `build: {recipe_checkout, command}` on `build_host`. `ship` streams the image once from the build host to
   every other host and refuses when a host has less than `min_free_gb`.
 - **`command`**: `host` (`local` or a `hosts:` entry; `local: true` runs commands on the agent's machine), `cwd`, `start`,
-  `stop`, `env`, `api`, `model`. `start` must return: daemonise the server (nohup / setsid / tmux). Readiness is the API
-  answering `/models`. `artifact` (a path) is hashed so the report names the weights.
+  `stop` (required: pairtest stops a target before it starts the next one, and at the end before the live one), `env`,
+  `api`, `model`. `start` is run detached with `nohup` and no inherited descriptors (works on macOS), so it may leave the
+  server running. Readiness is the API answering `/models`. `artifact` (a file or a model directory) is hashed, a file
+  by content and a directory by its file list with sizes, so the report names the weights. `~/` in paths is expanded on
+  the host that runs the command.
 - **`service`**: `host`, `service: {kind: systemd-user | systemd | launchd, name}`, optional `env_file` + `env` written before
-  the restart (an `EnvironmentFile=` for systemd, or a file your launchd plist's program reads).
+  the start (an `EnvironmentFile=` for systemd, or a file your launchd plist's program reads). Stopping uses
+  `systemctl stop` / `launchctl kill`; `systemd` (system scope) needs passwordless sudo for that unit.
 
 ## Per-target options the suites read
 
@@ -33,6 +37,8 @@ how a server is started and stopped (the **backend**) and what is worth recordin
 ## Adding a platform or backend
 
 - A probe: add a function `(sh, target) -> dict` to `suites/probes.py` and register it in `PROBES`. Keep it read-only.
+- What a report may contain is an allowlist (`lab.public_env`, a regex over environment keys; secret-looking keys are
+  redacted): host names, addresses, users, paths and launch commands never leave `log.txt`.
 - A backend: add a class to `scripts/pairtest` with `start`, `artifact_id`, `build`, `ship`, and register it in `BACKENDS`.
 - A suite: a function `(ctx) -> {"ok": bool, …}` in `suites/`, registered in that module's `SUITES`. `ctx` gives `api`,
   `model`, `opts`, `log`, `target`, `head`, `hosts`, `ssh`, `platform`, `restart`, `sample`.
