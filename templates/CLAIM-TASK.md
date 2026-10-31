@@ -26,7 +26,9 @@ observe it (a fault hook, a log line, a unit test in the repository). That is a 
 
 ## What to produce (when the claim can be exercised)
 
-`claim.sh` in this directory, called as `claim.sh API MODEL`:
+`claim.sh` in this directory, called as `claim.sh API MODEL [LOGCMD]`:
+- `LOGCMD`, when given, is a shell command that prints the server's recent log (run it with `bash -c "$3"`); use it
+  for a claim about what the server logs (an access line, a warning), and treat it as absent when `$3` is empty;
 - bash with curl or python3 only; deterministic (temperature 0, fixed inputs); finished in under ten minutes;
 - prints evidence lines as it goes, then exactly one final line: `CLAIM: holds` and exit 0, or `CLAIM: does not hold`
   and exit 1; on an API failure that prevents the check, `CLAIM: error <why>` and exit 2;

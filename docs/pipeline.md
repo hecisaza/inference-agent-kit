@@ -63,6 +63,18 @@ against the PR); passes on the base and fails on the PR → NOT READY; a script 
 or a timeout) on either side → inconclusive. The claims accumulate on the
 fork as a library a PR author can be handed. A NOT READY on someone else's PR is theirs to fix; the pipeline reports.
 
+## Three more ways a change gets verified
+
+- **The pull request's own tests** (`scripts/hosttests.sh`): the test files the PR adds or changes under `tests/` run on
+  the PR tree and on a copy of the base tree with those files copied in. Pass on the PR and fail on the base is the
+  author's own isolation of the change and counts as verified; pass on both means the tests do not depend on the
+  change; fail on the PR blocks. No lab time, no agent.
+- **Startup time**: every switch records the seconds from stopping the previous configuration to the new one
+  answering, compared like the other performance metrics (a load-path PR claims exactly this).
+- **The server log for claim scripts**: a target may carry `log_cmd` (a command that prints the head's recent log);
+  the claim script receives it as its third argument, so a claim about what the server logs can be tested. Output
+  tails are redacted of addresses before they become evidence.
+
 ## What a run produces
 
 - `docs/evidence/<run>/report.md`, `report.html` and the charts, committed to the PR branch (a PR of the fork) or to

@@ -119,6 +119,17 @@ printf 'Faster prefill\n\nThis change raises prefill throughput.\n' > "$pv/PR-pe
 python3 scripts/verdict.py "$pv/fast" --pr-file "$pv/PR-perf.md" > "$pv/o2" 2>&1 && grep -q "READY.*faster than the control as the PR claims" "$pv/o2" && ! grep -q "NOT READY" "$pv/o2" && ok "verdict.py: a 10 % speed-up on a PR that claims performance -> READY" || bad "verdict fast: $(cat "$pv/o2")"
 python3 scripts/verdict.py "$pv/fast" --pr-file "$pv/PR-docs.md" > "$pv/o3" 2>&1 && grep -q "SAFE, UNVERIFIED.*noted but not counted" "$pv/o3" && ok "verdict.py: a speed-up on a PR that does not claim performance is noted, not counted" || bad "verdict fast/no-claim: $(cat "$pv/o3")"
 rm -rf "$pv"
+# hosttests.sh: a PR that adds a test which needs its fix -> confirmed; a test that passes without the fix -> not isolating; no tests -> no tests
+ht=$(mktemp -d); mkdir -p "$ht/base/tests" "$ht/pr/tests"
+printf 'import unittest, os\nclass T(unittest.TestCase):\n    def test_fix_present(self):\n        self.assertTrue(os.path.exists(os.path.join(os.path.dirname(__file__), "..", "fix.txt")))\n' > "$ht/pr/tests/test_fix.py"
+echo fixed > "$ht/pr/fix.txt"
+bash scripts/hosttests.sh --pr "$ht/pr" --base "$ht/base" --out "$ht/ht1.json" > "$ht/o1" 2>&1 && grep -q '"verdict": "confirmed"' "$ht/ht1.json" && grep -q "on the PR: passes" "$ht/o1" && ok "hosttests.sh: the PR's test passes on the PR and fails on the base -> confirmed" || bad "hosttests confirmed: $(cat "$ht/o1")"
+printf 'import unittest\nclass T(unittest.TestCase):\n    def test_trivial(self):\n        self.assertEqual(1, 1)\n' > "$ht/pr/tests/test_fix.py"
+bash scripts/hosttests.sh --pr "$ht/pr" --base "$ht/base" --out "$ht/ht2.json" > "$ht/o2" 2>&1 && grep -q '"verdict": "not isolating"' "$ht/ht2.json" && ok "hosttests.sh: a test that passes without the change -> not isolating" || bad "hosttests not isolating: $(cat "$ht/o2")"
+rm "$ht/pr/tests/test_fix.py"; bash scripts/hosttests.sh --pr "$ht/pr" --base "$ht/base" --out "$ht/ht3.json" > "$ht/o3" 2>&1 && grep -q '"verdict": "no tests"' "$ht/ht3.json" && ok "hosttests.sh: no test file in the PR -> no tests" || bad "hosttests none: $(cat "$ht/o3")"
+# verdict.py: a green run plus the PR's own tests confirmed -> READY; startup time appears in the performance facts
+cp "$ht/ht1.json" "$full_run/hosttests.json"; python3 scripts/verdict.py "$full_run" > "$ht/o4" 2>&1 && grep -q "READY.*own tests fail on the base and pass on the pull request" "$ht/o4" && grep -q "startup" "$full_run/VERDICT.md" && ok "verdict.py: the PR's own tests confirmed -> READY; startup time among the performance facts" || bad "verdict hosttests: $(cat "$ht/o4") $(grep performance "$full_run/VERDICT.md")"
+rm -f "$full_run/hosttests.json"; rm -rf "$ht"
 # evidence-review.sh: bundle (diff, report, results, suites, run facts) + a fake reviewer -> REVIEW.md next to the run
 er=$(mktemp -d); git init -q "$er/co"; echo a > "$er/co/f"; git -C "$er/co" add f; git -C "$er/co" -c user.name=t -c user.email=t@example.com commit -q -m base
 echo b > "$er/co/f"; git -C "$er/co" -c user.name=t -c user.email=t@example.com commit -q -am head

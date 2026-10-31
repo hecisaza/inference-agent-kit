@@ -303,11 +303,13 @@ class Switcher:
     def __init__(self, lab, log):
         self.lab, self.log = lab, log
         self.current = ("live", lab.c["live"]) if lab.c.get("live") else None
+        self.starts = {}   # name -> seconds from the stop of the previous configuration to this one answering
 
     def to(self, name, t):
         if self.current and config_hash(self.lab, self.current[1]) == config_hash(self.lab, t):
             self.log(f"{name}: the running configuration ({self.current[0]}) is the same; kept")
             mark(self.lab, t, name); self.current = (name, t); return
+        t0 = time.time()
         if self.current:
             backend(self.lab, self.current[1]).stop(self.current[1], self.log)
         backend(self.lab, t).start(t, self.log)
@@ -315,6 +317,8 @@ class Switcher:
         self.current = (name, t)
         if not self.lab.dry:
             self.log(f"ready after {ready(t['api'])} s")
+            self.starts.setdefault(name, []).append(round(time.time() - t0, 1))
+            self.log(f"startup: {name} answered {self.starts[name][-1]} s after the switch began")
 
 
 # ---------------------------------------------------------------- commands
@@ -379,7 +383,7 @@ def cmd_run(lab, a):
                         r = {"ok": False, "skipped": "no bench_cmd"} if not cmd else {"ok": subprocess.run(cmd, shell=True).returncode == 0, "cmd": cmd}
                     else:
                         ctx = {"api": t["api"], "model": t["model"], "out": run, "opts": {**{"chunk": t.get("chunk", 2048)}, **opts}, "log": log,
-                               "role": "candidate" if name == names[0] else "control",
+                               "role": "candidate" if name == names[0] else "control", "log_cmd": t.get("log_cmd", ""),
                                "target": t, "head": head, "hosts": list(lab.c["hosts"]), "ssh": lab.sh, "platform": lab.platform(head),
                                "restart": lambda t=t, name=name: sw.to(name, t), "sample": lambda t=t, h=head: {"head": lab.probe(h, t)}}
                         try:
@@ -392,6 +396,8 @@ def cmd_run(lab, a):
                     results.setdefault(s, {}).setdefault(name, []).append(r)
                     json.dump(results, open(os.path.join(run, "results.json"), "w"), indent=1)
     finally:
+        if sw.starts:  # startup time is evidence too: seconds from the switch to the API answering, per start
+            results["startup"] = {n: [{"ok": True, "seconds_per_start": v}] for n, v in sw.starts.items()}
         if not a.no_restore:
             try:
                 live = lab.c["live"]

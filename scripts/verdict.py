@@ -43,7 +43,8 @@ def series(R, suite, target, pick):
 
 
 PERF = [("decode", "perf", lambda r: r.get("decode_tps") or [], 1), ("prefill", "perf", lambda r: r.get("prefill_tps") or [], 1),
-        ("aggregate", "perf", lambda r: r.get("batch_tps") or [], 1), ("cut-in", "cutin", lambda r: [x.get("short") for x in r.get("rounds", [])], -1)]
+        ("aggregate", "perf", lambda r: r.get("batch_tps") or [], 1), ("cut-in", "cutin", lambda r: [x.get("short") for x in r.get("rounds", [])], -1),
+        ("startup", "startup", lambda r: r.get("seconds_per_start") or [], -1)]
 
 
 def performance(R, cand, ctrl, floor=0.03):
@@ -129,7 +130,18 @@ def main():
     slow = [x for x in perf if x["call"] == "slower"]; fast = [x for x in perf if x["call"] == "faster"]
     if perf:
         facts.append("performance against the control (each with its own noise band): " + " · ".join(f"{x['metric']} {x['delta']:+.0%} (±{x['noise']:.0%}{', ' + x['call'] if x['call'] != 'same' else ''})" for x in perf))
-    perf_claim = bool(a.pr_file and os.path.isfile(a.pr_file) and re.search(r"faster|slower|throughput|latenc|tok/s|tokens/s|speed|perf", open(a.pr_file, errors="ignore").read(), re.I))
+    perf_claim = bool(a.pr_file and os.path.isfile(a.pr_file) and re.search(r"faster|slower|throughput|latenc|tok/s|tokens/s|speed|perf|load time|startup|start time", open(a.pr_file, errors="ignore").read(), re.I))
+    # the pull request's own tests (scripts/hosttests.sh): run on the PR tree and on the base with the PR's test files
+    ht = None
+    hp = os.path.join(run, "hosttests.json")
+    if os.path.isfile(hp):
+        try:
+            ht = json.load(open(hp))
+        except ValueError:
+            ht = None
+    if ht:
+        c_, k_ = ht.get("candidate") or {}, ht.get("control") or {}
+        facts.append(f"the PR's own tests: {ht.get('verdict')}" + (f" ({len(ht.get('files', []))} file(s): on the PR {c_.get('outcome')}, on the base with the PR's tests {k_.get('outcome')})" if ht.get("files") else ""))
     rv = review_verdict(a.review)
     facts.append(f"second opinion: {rv or 'none'}")
     col = collisions(a.sync, a.pr)
@@ -144,6 +156,8 @@ def main():
         blockers.append("the reproduction script still shows the problem on the candidate")
     if repro == "regression":
         blockers.append(f"the {kind} script passes on the base and fails on the candidate")
+    if ht and ht.get("verdict") == "fails on the PR":
+        blockers.append("the pull request's own tests fail on the pull request")
     if col:
         blockers.append("a patch number collides with another open pull request")
     if slow:
@@ -170,9 +184,10 @@ def main():
         reasons = blockers
         if reasons:
             cls = "NOT READY"
-        elif repro == "confirmed" or rv == "EVIDENCE SUPPORTS THE CLAIM" or (fast and perf_claim):
+        elif repro == "confirmed" or rv == "EVIDENCE SUPPORTS THE CLAIM" or (fast and perf_claim) or (ht and ht.get("verdict") == "confirmed"):
             cls = "READY"
             reasons.append("every suite green, no slowdown" + (", the claim or reproduction script fails on the base and passes on the candidate" if repro == "confirmed" else "")
+                           + (", the pull request's own tests fail on the base and pass on the pull request" if ht and ht.get("verdict") == "confirmed" else "")
                            + (", the second opinion supports the claim" if rv == "EVIDENCE SUPPORTS THE CLAIM" else "")
                            + ((", faster than the control as the PR claims: " + ", ".join(f"{x['metric']} {x['delta']:+.0%}" for x in fast)) if fast and perf_claim else ""))
         else:

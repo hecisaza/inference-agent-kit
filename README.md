@@ -39,6 +39,7 @@ Then start your agent in the directory of the recipe you work on and tell it to 
 | `scripts/issue-agent.sh`, `templates/ISSUE-TASK.md` | issue | an agent reproduces an issue on the live build and fixes it on a branch; the script confirms the reproduction, opens the PR for the pipeline, or posts what was tried |
 | `scripts/evidence-review.sh`, `templates/EVIDENCE-REVIEW-TASK.md` | 3, 4 | a second opinion on a run from a different model, read-only: recomputes the report from the raw results, checks which changed paths the suites exercised, grades each claim of the PR |
 | `scripts/claim-agent.sh`, `templates/CLAIM-TASK.md` | 3 | from SAFE, UNVERIFIED to verified: an agent writes the claim test the suites lacked, it must fail on the base, the pipeline reruns the PR with it |
+| `scripts/hosttests.sh` | 1, 3 | the PR's own tests, run on the PR and on the base with the PR's test files: the author's isolation of the change, no lab time |
 | `scripts/verdict.py` | 4 | merge readiness of a run, computed: READY / SAFE, UNVERIFIED / NOT READY / RERUN, with the reasons and the facts; a person merges |
 | `docs/pipeline.md` | all | the GitHub Actions pipeline: any PR tested against its base on the lab, an issue worked by the agent, what is automatic and what needs a person |
 | `docs/platforms.md`, `lab.examples/` | 3 | DGX Spark, RTX 6000 / NVIDIA workstation (vLLM, SGLang), Apple Silicon (MLX, llama.cpp): how each is declared |

@@ -12,12 +12,12 @@ reply. The "what this run does not show" section lists the suites that did not r
 complete."""
 import argparse, html, json, os, re, statistics
 
-ALL_SUITES = ("smoke", "boundary", "cutin", "perf", "soak", "fault", "repro", "bench")
+ALL_SUITES = ("smoke", "boundary", "cutin", "perf", "startup", "soak", "fault", "repro", "bench")
 NOT_SHOWN = {"smoke": "basic answers, greedy repeat equality, streaming and JSON mode", "boundary": "reply equality at chunk ends and prefix-cache cases",
              "cutin": "a short request's first-token time behind a cold long prompt", "soak": "errors, canary mismatches and resource growth over time with client aborts",
              "fault": "a clean pair exit and recovery after an injected read fault", "bench": "an external benchmark against a control (The Grill or similar)",
              "repro": "whether the issue's reproduction command shows the problem on the control and not on the candidate",
-             "perf": "decode, prefill and aggregate throughput against the control"}
+             "perf": "decode, prefill and aggregate throughput against the control", "startup": "seconds from the switch to the API answering"}
 HASH = re.compile(r"^[0-9a-f]{12}$")
 
 
@@ -138,6 +138,12 @@ def main():
             for key, title in (("decode", "Decode: tokens per second, one stream"), ("prefill", "Prefill: prompt tokens per second, cold long prompt"), ("aggregate", "Aggregate: tokens per second over concurrent streams")):
                 charts[f"perf-{key}.svg"] = bar_svg([(f"{n} rep {i}", v, n == cand) for n in names for i, v in enumerate(agg.get(key, {}).get(n, []))], unit="tok/s", title=title)
                 md.append(f"\n![{key}](perf-{key}.svg)")
+        elif s == "startup":
+            for n in names:
+                for r in R[s].get(n, []):
+                    v = r.get("seconds_per_start") or []
+                    md.append(f"`{cell(n)}`: {', '.join(f'{x} s' for x in v)} from the switch to the API answering ({len(v)} start(s))")
+            md.append("")
         elif s == "soak":
             bars = []
             for n in names:
@@ -198,7 +204,20 @@ def main():
 
     # ---- limits
     skipped = [(s, r.get("skipped")) for s in R for n in R[s] for r in R[s][n] if r.get("skipped")]
-    missing = [s for s in ALL_SUITES if s not in R and s != "repro"]  # repro only exists when an issue is being fixed
+    missing = [s for s in ALL_SUITES if s not in R and s not in ("repro", "startup")]  # repro only when a script is given; startup only after a switch
+    hp = os.path.join(run, "hosttests.json")
+    if os.path.isfile(hp):
+        try:
+            ht = json.load(open(hp))
+            md.append("#### the pull request's own tests\n")
+            if ht.get("files"):
+                c_, k_ = ht.get("candidate") or {}, ht.get("control") or {}
+                md.append(f"**{cell(ht.get('verdict'))}** — {len(ht['files'])} test file(s) added or changed by the PR (" + ", ".join(f"`{cell(f)}`" for f in ht["files"]) + f"): on the PR **{c_.get('outcome')}** (exit {c_.get('exit')}), on the base with the PR's tests copied in **{k_.get('outcome')}** (exit {k_.get('exit')}).")
+                md.append(f"\n- PR: `{cell(c_.get('summary', ''))}`\n- base + PR tests: `{cell(k_.get('summary', ''))}`\n")
+            else:
+                md.append("The pull request adds or changes no test file under `tests/`.\n")
+        except ValueError:
+            pass
     md.append("#### What this run does not show\n")
     for s in missing: md.append(f"- {NOT_SHOWN[s]} (`{s}` did not run)")
     for s, why in dict(skipped).items(): md.append(f"- {NOT_SHOWN[s]} (`{s}` was skipped: {cell(why)})")

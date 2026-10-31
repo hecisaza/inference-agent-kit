@@ -85,7 +85,8 @@ def repro(ctx):
         return {"ok": False, "skipped": "no repro_cmd (pass --opt repro_cmd='bash tests/repro-issue-N.sh {api} {model}')"}
     role = ctx.get("role", "candidate")
     full = cmd
-    for k, v in (("{api}", ctx["api"]), ("{model}", ctx["model"]), ("{out}", ctx["out"]), ("{role}", role)):
+    import shlex
+    for k, v in (("{api}", ctx["api"]), ("{model}", ctx["model"]), ("{out}", ctx["out"]), ("{role}", role), ("{logcmd}", shlex.quote(ctx.get("log_cmd") or ""))):
         full = full.replace(k, str(v))
     env = {k: v for k, v in os.environ.items() if k not in ("GH_TOKEN", "GITHUB_TOKEN")}
     try:
@@ -95,7 +96,10 @@ def repro(ctx):
         rc, out = -1, f"timeout after {e.timeout} s\n" + ((e.stdout or b"").decode(errors="ignore") if isinstance(e.stdout, bytes) else (e.stdout or ""))
     outcome = "passes" if rc == 0 else ("fails" if rc == 1 else "error")
     expected = "fails" if role == "control" else "passes"
-    return {"ok": outcome == expected, "role": role, "exit": rc, "outcome": outcome, "shows_problem": outcome == "fails", "cmd": cmd, "output_tail": out[-2000:]}
+    import re
+    tail = re.sub(r"([0-9]{1,3}\.){3}[0-9]{1,3}", "[address]", out[-2000:])   # a log excerpt may carry client addresses; the tail is public evidence
+    tail = re.sub(r"[A-Za-z0-9_.-]+@[A-Za-z0-9.-]+", "[user@host]", tail)
+    return {"ok": outcome == expected, "role": role, "exit": rc, "outcome": outcome, "shows_problem": outcome == "fails", "cmd": cmd, "output_tail": tail}
 
 
 def perf(ctx):
