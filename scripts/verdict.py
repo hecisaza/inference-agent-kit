@@ -102,7 +102,7 @@ def main():
             repro = "not reproduced on the base"
         else:
             repro = "confirmed"
-        facts.append(f"repro script: {repro}" if repro else "repro script: skipped")
+        facts.append(f"claim / repro script: {repro}" if repro else "claim / repro script: skipped")
 
     perf = performance(R, cand, ctrl) if cand and ctrl else []
     slow = [x for x in perf if x["call"] == "slower"]; fast = [x for x in perf if x["call"] == "faster"]
@@ -127,7 +127,7 @@ def main():
         if cand_fail:
             reasons.append(f"{', '.join(cand_fail)} failed on the candidate")
         if repro == "still present":
-            reasons.append("the reproduction script still shows the problem on the candidate")
+            reasons.append("the claim or reproduction script does not pass on the candidate (the problem still shows, or the claim does not hold)")
         if col:
             reasons.append("a patch number collides with another open pull request")
         if slow:
@@ -140,12 +140,12 @@ def main():
             cls = "NOT READY"
         elif repro == "confirmed" or rv == "EVIDENCE SUPPORTS THE CLAIM" or fast:
             cls = "READY"
-            reasons.append("every suite green, no slowdown" + (", the reproduction confirmed on both sides" if repro == "confirmed" else "")
+            reasons.append("every suite green, no slowdown" + (", the claim or reproduction script fails on the base and passes on the candidate" if repro == "confirmed" else "")
                            + (", the second opinion supports the claim" if rv == "EVIDENCE SUPPORTS THE CLAIM" else "")
                            + ((", faster than the control: " + ", ".join(f"{x['metric']} {x['delta']:+.0%}" for x in fast)) if fast else ""))
         else:
             cls = "SAFE, UNVERIFIED"
-            reasons.append("no regression, no slowdown; " + ("the reproduction did not show the problem on the base, so the fix is unconfirmed" if repro == "not reproduced on the base"
+            reasons.append("no regression, no slowdown; " + ("the claim or reproduction script passes on the base too, so it does not isolate the change" if repro == "not reproduced on the base"
                            else "the changed path was not exercised by any suite" + (" (second opinion: claim not tested)" if rv and "NOT TESTED" in rv else "")))
     label = a.label_prefix + LABEL[cls]
     head = f"**Merge readiness: {cls}** — {'; '.join(reasons)}."

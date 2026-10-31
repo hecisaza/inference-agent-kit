@@ -126,6 +126,16 @@ REVIEWER="$er/rev" bash scripts/evidence-review.sh "$rep" --checkout "$er/co" --
 REVIEWER=/bin/false bash scripts/evidence-review.sh "$rep" --checkout "$er/co" --base HEAD~1 --head HEAD > /dev/null 2>&1; rc=$?
 [ "$rc" = 0 ] && [ -s "$rep/review-missing.txt" ] && ok "evidence-review.sh: a reviewer that fails leaves review-missing.txt and exit 0" || bad "evidence-review.sh failure path: rc=$rc"
 rm -rf "$er"
+# claim-agent.sh with a fake agent: against a base that answers wrongly the claim test is accepted; against a base where
+# the claim already holds it is refused after the correction round (does not isolate the change)
+nohup python3 tests/fake_server.py 18612 --wrong > /dev/null 2>&1 &
+cbad=$!; sleep 0.7
+cr=$(ls -dt /tmp/selftest-runs/2*/ 2>/dev/null | head -1)   # the run that evidence-review.sh bundled (review/pr.patch, PR.md)
+r=$(AGENT_CMD="bash $PWD/tests/fake-claim-agent.sh" GH_TOKEN=should-not-reach-the-agent LIVE_API=http://127.0.0.1:18612/v1 LIVE_MODEL=fake-model bash scripts/claim-agent.sh "$cr" --pr-url https://example.invalid/pull/1 --out /tmp/selftest-claim.sh 2>&1); rc=$?
+[ "$rc" = 0 ] && grep -q "RESULT: claim /tmp/selftest-claim.sh" <<<"$r" && grep -q "CLAIM: does not hold" "$cr/claim/base-run.txt" && [ -x /tmp/selftest-claim.sh ] && ok "claim-agent: claim test written, fails on the base, accepted" || bad "claim-agent accept: rc=$rc $(tail -3 <<<"$r")"
+r=$(AGENT_CMD="bash $PWD/tests/fake-claim-agent.sh" LIVE_API=http://127.0.0.1:18611/v1 LIVE_MODEL=fake-model bash scripts/claim-agent.sh "$cr" --pr-url https://example.invalid/pull/1 --out /tmp/selftest-claim2.sh 2>&1); rc=$?
+[ "$rc" = 0 ] && grep -q "RESULT: no-claim after two rounds: the claim already holds on the base" <<<"$r" && [ ! -e /tmp/selftest-claim2.sh ] && grep -q "Correction (round 2)" "$cr/claim/TASK.md" && ok "claim-agent: a claim that already holds on the base is refused after one correction round" || bad "claim-agent refuse: rc=$rc $(tail -3 <<<"$r")"
+kill "$cbad" 2>/dev/null; rm -f /tmp/selftest-claim.sh
 # issue-agent.sh with a fake agent and a fake gh: a local bare "origin", the live build = the bad server (shows the problem)
 nohup python3 tests/fake_server.py 18612 --wrong > /dev/null 2>&1 &
 badpid=$!; sleep 0.7

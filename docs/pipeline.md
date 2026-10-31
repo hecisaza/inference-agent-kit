@@ -47,6 +47,19 @@ The agent's trust boundary is the runner host: it works as the runner's user wit
 of its task (read-only on the lab hosts, the live API only, no pushing or posting). Those rules are an instruction, not a
 sandbox. Give it issues you would give a new contributor with the same access.
 
+## From SAFE, UNVERIFIED to READY: the verify step
+
+SAFE, UNVERIFIED means no suite exercised what the pull request changes. The second opinion says in its section 2 what
+would. On the first attempt of a run that ends there, the `verify` job hands the diff, the description, the second
+opinion and the report to an agent (`scripts/claim-agent.sh`, task `templates/CLAIM-TASK.md`, no token) that writes
+`claim.sh API MODEL`: evidence lines, then `CLAIM: holds` (exit 0) or `CLAIM: does not hold` (exit 1). The script is
+run against the live build, which is the base: it must say the claim does not hold there, or it does not isolate the
+change; the agent gets one correction round. An accepted claim is committed under `claims/<owner>-<repo>-pr-<n>.sh`
+on the fork's main and the pipeline is dispatched again for the same PR (`attempt=2`, the cap). That run picks the
+claim up as the repro suite: fails on the base and passes on the PR → READY; fails on the PR → NOT READY with the
+output; passes on both → stays UNVERIFIED and says the test does not isolate the change. The claims accumulate on the
+fork as a library a PR author can be handed. A NOT READY on someone else's PR is theirs to fix; the pipeline reports.
+
 ## What a run produces
 
 - `docs/evidence/<run>/report.md`, `report.html` and the charts, committed to the PR branch (a PR of the fork) or to
@@ -54,6 +67,7 @@ sandbox. Give it issues you would give a new contributor with the same access.
 - A comment on the PR of the fork with the first 200 lines of the report and the second opinion; for a PR elsewhere,
   the same text in the run summary, ready to paste once the owner says so.
 - `VERDICT.md` and `verdict.json`: the merge-readiness class with its reasons and the facts it rests on.
+- On a verify run: the agent's claim attempt (task, rounds, the run on the base) as an artifact, and `claims/…sh` on main.
 - `REVIEW.md`: the second opinion (verdict line: EVIDENCE SUPPORTS THE CLAIM / NO REGRESSION SHOWN, CLAIM NOT TESTED /
   EVIDENCE CONTRADICTS THE CLAIM / EVIDENCE UNRELIABLE), or `review-missing.txt` with the reason there is none.
 - For an issue: the agent's `REPRO.md`, `PR.md`, the task and the logs as a run artifact; a PR with `Closes #n` when the
