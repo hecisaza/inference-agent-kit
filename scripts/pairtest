@@ -339,6 +339,7 @@ def cmd_run(lab, a):
     if not lab.c.get("live") and not a.no_restore:
         sys.exit("lab.yaml has no live: section; pass --no-restore if nothing should be started afterwards")
     opts = dict(kv.split("=", 1) for kv in a.opt)
+    reps = int(opts.get("reps", 1))
     run = os.path.join(a.runs, datetime.datetime.now().strftime("%Y%m%dT%H%M%S"))
     os.makedirs(run, exist_ok=True)
     logf = open(os.path.join(run, "log.txt"), "a")
@@ -347,7 +348,7 @@ def cmd_run(lab, a):
     kit_rev = subprocess.run(["git", "-C", HERE, "rev-parse", "--short", "HEAD"], capture_output=True, text=True).stdout.strip()
     meta = {"targets_order": names, "candidate": names[0], "control": names[1] if len(names) > 1 else None, "suites": suites,
             "opts": {k: v for k, v in opts.items()}, "started": datetime.datetime.now().isoformat(timespec="seconds"), "kit": kit_rev,
-            "fabric": lab.c.get("fabric"), "conditions": opts.get("conditions", ""), "order": "counterbalanced: A B, then B A per repetition",
+            "fabric": lab.c.get("fabric"), "conditions": opts.get("conditions", ""), "order": ("A then B, one repetition (no reverse order: pass --opt reps=2 for a counterbalanced run)" if reps == 1 else f"counterbalanced over {reps} repetitions: A B, then B A"),
             "targets": {n: public_target(lab, lab.c["targets"][n]) for n in names}, "restore": None}
     for n in names:
         t = lab.c["targets"][n]; meta["targets"][n]["artifact_id"] = "" if lab.dry else backend(lab, t).artifact_id(t.get("head", t.get("host", "local")), t)
@@ -356,7 +357,7 @@ def cmd_run(lab, a):
     def on_term(signum, frame): raise SystemExit(f"signal {signum}")  # noqa: E306  (the finally below restores)
     signal.signal(signal.SIGTERM, on_term)
     try:
-        for rep in range(int(opts.get("reps", 1))):
+        for rep in range(reps):
             for name in (names if rep % 2 == 0 else names[::-1]):
                 t = lab.c["targets"][name]; sw.to(name, t)
                 head = t.get("head", t.get("host", "local"))

@@ -64,7 +64,7 @@ def cutin(ctx):
     for k in range(int(ctx["opts"].get("rounds", 3))):
         out = {}
         def long():  # noqa: E306
-            r = chat(api, model, [{"role": "user", "content": words(n_words, int(time.time()) + k)}], max_tokens=8, stream=True)
+            r = chat(api, model, [{"role": "user", "content": words(n_words, 7000 + k)}], max_tokens=8, stream=True)  # same prompt per round on both targets; distinct rounds
             out["long"] = r.get("ttft"); r.get("error") and errs.append(f"round {k} long: {r['error']}")
         t = threading.Thread(target=long); t.start(); time.sleep(3)
         r = chat(api, model, [{"role": "user", "content": "What is 17 times 23? Number only."}], max_tokens=8, stream=True)
