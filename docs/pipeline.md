@@ -18,6 +18,14 @@ workflows live in the fork's default branch (`.github/workflows/spark-test.yml` 
                                                     not reproduced ─► comment on the issue (here) / draft (elsewhere)
 ```
 
+## What is compared
+
+The candidate is the pull request **merged onto its current base** (GitHub's test merge), the control is that base: the
+difference between the two builds is exactly the PR's change on today's main, however old the branch is. A PR that
+does not merge cleanly is tested as its head against the commit it branched from (the merge-base), and the comment
+says so; the author still has to rebase before anyone can merge it. The evidence commit goes on the PR head, never on
+the test merge.
+
 ## What is automatic, and what is not
 
 | step | who | gate |
