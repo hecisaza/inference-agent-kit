@@ -115,6 +115,16 @@ for name, f in (("slow", 0.9), ("fast", 1.1)):
     json.dump(X, open(f"{d}/{name}/results.json", "w"))
 PY
 python3 scripts/verdict.py "$pv/slow" > "$pv/o1" 2>&1 && grep -q "NOT READY.*slower than the control" "$pv/o1" && ok "verdict.py: a 10 % slowdown beyond the noise -> NOT READY" || bad "verdict slow: $(cat "$pv/o1")"
+python3 - "$pv" <<'PY'
+import json, os
+d = sys_d = os.environ.get("PV") or __import__("sys").argv[1]
+R = json.load(open(f"{d}/fast/results.json")); cand, ctrl = R["meta"]["candidate"], R["meta"]["control"]
+R["perf"] = {ctrl: [{"ok": True, "decode_tps": [100.0, 101.0, 99.0], "prefill_tps": [1000.0, 1010.0, 990.0], "batch_tps": [300.0, 303.0, 297.0], "errors": []}],
+             cand: [{"ok": True, "decode_tps": [100.0, 101.0, 99.0], "prefill_tps": [1000.0, 1010.0, 990.0], "batch_tps": [300.0, 303.0, 297.0], "errors": []}]}
+R["startup"] = {ctrl: [{"ok": True, "seconds_per_start": [170.0]}], cand: [{"ok": True, "seconds_per_start": [180.0]}]}   # one sample a side, 6 % slower
+os.makedirs(f"{d}/startup", exist_ok=True); json.dump(R, open(f"{d}/startup/results.json", "w"))
+PY
+python3 scripts/verdict.py "$pv/startup" > "$pv/o5" 2>&1 && ! grep -q "NOT READY" "$pv/o5" && grep -q "startup -6%.*one sample a side: not called" "$pv/startup/VERDICT.md" && ok "verdict.py: a single-sample startup difference is reported, never called" || bad "verdict startup single sample: $(cat "$pv/o5") $(grep startup "$pv/startup/VERDICT.md")"
 printf 'Faster prefill\n\nThis change raises prefill throughput.\n' > "$pv/PR-perf.md"; printf 'Docs\n\nA wording fix.\n' > "$pv/PR-docs.md"
 python3 scripts/verdict.py "$pv/fast" --pr-file "$pv/PR-perf.md" > "$pv/o2" 2>&1 && grep -q "READY.*faster than the control as the PR claims" "$pv/o2" && ! grep -q "NOT READY" "$pv/o2" && ok "verdict.py: a 10 % speed-up on a PR that claims performance -> READY" || bad "verdict fast: $(cat "$pv/o2")"
 python3 scripts/verdict.py "$pv/fast" --pr-file "$pv/PR-docs.md" > "$pv/o3" 2>&1 && grep -q "SAFE, UNVERIFIED.*noted but not counted" "$pv/o3" && ok "verdict.py: a speed-up on a PR that does not claim performance is noted, not counted" || bad "verdict fast/no-claim: $(cat "$pv/o3")"

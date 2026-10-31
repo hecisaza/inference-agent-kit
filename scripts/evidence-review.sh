@@ -6,8 +6,8 @@
 # the bundle to review.sh (REVIEWER, default Codex) with templates/EVIDENCE-REVIEW-TASK.md, and leaves RUN_DIR/REVIEW.md.
 # It never fails a pipeline: when no review could be produced, RUN_DIR/review-missing.txt says why and the exit is 0.
 # Nothing private goes into the bundle: no log.txt (host names, launch commands), only the report, results.json (the
-# public settings, as pairtest writes it), the suites and the pull request's own text and diff; a bundle that still
-# contains an address is not sent.
+# public settings, as pairtest writes it), the suites and the pull request's own text and diff; addresses and user@host
+# that test output or log excerpts carry are redacted before the bundle is handed over.
 set -uo pipefail
 here=$(cd "$(dirname "$0")/.." && pwd)
 run=${1:?usage: evidence-review.sh RUN_DIR --checkout DIR --base SHA --head SHA [--pr-url URL] [--pr-file FILE] [--timeout MIN]}; shift
@@ -45,10 +45,11 @@ except OSError:
 open(out, "w").write("\n".join(lines) + "\n")
 PY
 sed "s#{{PR_URL}}#${pr_url:-the pull request}#g" "$here/templates/EVIDENCE-REVIEW-TASK.md" > "$b/TASK.md"
-# nothing private leaves the lab: an address or user@host in the report, the results or the run facts stops the review
-if grep -qE "([0-9]{1,3}\.){3}[0-9]{1,3}|[A-Za-z0-9_.-]+@[A-Za-z0-9.-]+" "$b/report.md" "$b/results.json" "$b/run.txt"; then
-  missing "the bundle contains an address or a user@host; not sent (check lab.public_env and the probes)"
-fi
+# nothing private leaves the lab: addresses and user@host in the report, the results and the run facts are redacted
+# before the bundle is handed over (test output and log excerpts can carry them; they are not evidence)
+for f in "$b/report.md" "$b/results.json" "$b/run.txt"; do
+  sed -E -i 's/([0-9]{1,3}\.){3}[0-9]{1,3}/[address]/g; s/[A-Za-z0-9_.-]+@[A-Za-z0-9.-]+/[user@host]/g' "$f"
+done
 if "$here/scripts/review.sh" run "$b" --timeout "$timeout_min" > "$b/review.log" 2>&1 && [ -s "$b/REVIEW.md" ]; then
   sed -E 's/([0-9]{1,3}\.){3}[0-9]{1,3}/[address]/g' "$b/REVIEW.md" > "$run/REVIEW.md"   # belt and braces on the way out
   rm -f "$run/review-missing.txt"

@@ -34,30 +34,37 @@ def review_verdict(path):
 
 
 def series(R, suite, target, pick):
-    """Median and relative spread of a metric over every repetition of a target; (None, None) without data."""
+    """Median, relative spread and sample count of a metric over every repetition of a target; (None, None, 0) without data."""
     xs = [v for r in R.get(suite, {}).get(target, []) for v in pick(r) if isinstance(v, (int, float))]
     if not xs:
-        return None, None
+        return None, None, 0
     m = statistics.median(xs)
-    return m, ((max(xs) - min(xs)) / m if len(xs) > 1 and m else 0.0)
+    return m, ((max(xs) - min(xs)) / m if len(xs) > 1 and m else 0.0), len(xs)
 
 
 PERF = [("decode", "perf", lambda r: r.get("decode_tps") or [], 1), ("prefill", "perf", lambda r: r.get("prefill_tps") or [], 1),
         ("aggregate", "perf", lambda r: r.get("batch_tps") or [], 1), ("cut-in", "cutin", lambda r: [x.get("short") for x in r.get("rounds", [])], -1),
         ("startup", "startup", lambda r: r.get("seconds_per_start") or [], -1)]
+FLOOR = {"startup": 0.10}   # a model load varies by seconds between starts; the default floor is 3 %
 
 
 def performance(R, cand, ctrl, floor=0.03):
-    """Candidate against control per metric: + is better (throughput up, cut-in latency down). A difference counts
-    only beyond the noise: the larger of `floor` and either side's relative spread over its rounds."""
+    """Candidate against control per metric: + is better (throughput up, latency and startup down). A difference counts
+    only beyond the noise: the larger of the metric's floor and either side's relative spread over its rounds. A
+    metric with a single sample on either side has no measured spread and is reported, never called."""
     out = []
     for name, suite, pick, sign in PERF:
-        c, cs = series(R, suite, cand, pick); k, ks = series(R, suite, ctrl, pick)
+        c, cs, nc = series(R, suite, cand, pick); k, ks, nk = series(R, suite, ctrl, pick)
         if c is None or k is None or not k:
             continue
-        delta = sign * (c - k) / k; noise = max(floor, cs or 0.0, ks or 0.0)
-        out.append({"metric": name, "delta": delta, "noise": noise, "candidate": c, "control": k,
-                    "call": "slower" if delta < -noise else ("faster" if delta > noise else "same")})
+        f = FLOOR.get(name, floor)
+        delta = sign * (c - k) / k; noise = max(f, cs or 0.0, ks or 0.0)
+        call = "slower" if delta < -noise else ("faster" if delta > noise else "same")
+        if min(nc, nk) < 2:
+            call = "same"; single = True
+        else:
+            single = False
+        out.append({"metric": name, "delta": delta, "noise": noise, "candidate": c, "control": k, "call": call, "single": single})
     return out
 
 
@@ -129,7 +136,7 @@ def main():
     perf = performance(R, cand, ctrl) if cand and ctrl else []
     slow = [x for x in perf if x["call"] == "slower"]; fast = [x for x in perf if x["call"] == "faster"]
     if perf:
-        facts.append("performance against the control (each with its own noise band): " + " · ".join(f"{x['metric']} {x['delta']:+.0%} (±{x['noise']:.0%}{', ' + x['call'] if x['call'] != 'same' else ''})" for x in perf))
+        facts.append("performance against the control (each with its own noise band): " + " · ".join(f"{x['metric']} {x['delta']:+.0%} (±{x['noise']:.0%}{', ' + x['call'] if x['call'] != 'same' else ''}{', one sample a side: not called' if x.get('single') else ''})" for x in perf))
     perf_claim = bool(a.pr_file and os.path.isfile(a.pr_file) and re.search(r"faster|slower|throughput|latenc|tok/s|tokens/s|speed|perf|load time|startup|start time", open(a.pr_file, errors="ignore").read(), re.I))
     # the pull request's own tests (scripts/hosttests.sh): run on the PR tree and on the base with the PR's test files
     ht = None

@@ -47,11 +47,14 @@ cp -a "$base" "$tmp/base"; mkdir -p "$tmp/base/tests"
 while read -r f; do mkdir -p "$tmp/base/$(dirname "$f")"; cp "$pr/$f" "$tmp/base/$f"; done <<<"$changed"
 ctrl=$(run "$tmp/base" control "$tmp/control.txt")
 py "$out" "$cand" "$ctrl" "$tmp/candidate.txt" "$tmp/control.txt" <<EOF_FILES_PY
-import json, sys
+import json, re, sys
 out, cand, ctrl, cf, kf = sys.argv[1:6]
+def redact(t):  # test output may print addresses and users; the JSON is public evidence
+    t = re.sub(r"([0-9]{1,3}\.){3}[0-9]{1,3}", "[address]", t)
+    return re.sub(r"[A-Za-z0-9_.-]+@[A-Za-z0-9.-]+", "[user@host]", t)
 def parse(s, f):
     rc, outcome, summary = s.split("|", 2)
-    return {"exit": int(rc), "outcome": outcome, "summary": summary.strip(), "output_tail": open(f, errors="ignore").read()[-3000:]}
+    return {"exit": int(rc), "outcome": outcome, "summary": redact(summary.strip()), "output_tail": redact(open(f, errors="ignore").read()[-3000:])}
 c, k = parse(cand, cf), parse(ctrl, kf)
 files = """$tests""".split()
 if c["outcome"] == "error" or k["outcome"] == "error": v = "inconclusive"
