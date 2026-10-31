@@ -31,7 +31,9 @@ workflows live in the fork's default branch (`.github/workflows/spark-test.yml` 
 | confirm the reproduction on the live build, push the branch, open the PR on the fork, label it | `scripts/issue-agent.sh` | the agent's script must exit non-zero against live; otherwise the verdict becomes `unclear` and no PR is opened |
 | test that PR against its base | spark-test, in the same run | the repro suite: the script must show the problem on the base and not on the PR, or the run fails |
 | second opinion on the evidence | `scripts/evidence-review.sh`: a different model (Codex by default), read-only, gets the PR diff, the report, the raw results and the suites' source; recomputes the report, says which changed paths the suites exercised, grades each claim | advisory: its verdict is appended to the comment and kept with the evidence; a missing reviewer is reported, never hidden |
-| merge, or carry the fix upstream | a person | review of the evidence; the owner's go |
+| merge readiness | `scripts/verdict.py`, from the results, the second opinion and stage 0's collision check: **READY** (every suite green, replies identical or different exactly as claimed, no slowdown, the claim exercised and confirmed — repro, a supporting second opinion, or a measured speed-up — no collision) / **SAFE, UNVERIFIED** (no regression, no slowdown, the changed path not exercised) / **NOT READY** (a failed suite, unexplained differences, a slowdown beyond the noise, a repro still failing, a collision, a contradicting second opinion) / **RERUN** (restore failed, the control failed, evidence unreliable). Performance = decode, prefill and aggregate tokens/s from the `perf` suite and the cut-in latency, candidate against control, counted only beyond the larger of ±3 % and the rounds' spread | first lines of the comment; label `evidence:ready|unverified|blocked|rerun` on PRs of the fork |
+| merge, or carry the fix upstream | a person | READY is the evidence's word, not the merge; SAFE, UNVERIFIED is a code-review decision; the owner's go for anything upstream |
+| keep the fork's main at upstream's latest | `sync-upstream.yml`, daily and on demand: merges the upstream default branch into main (a merge commit keeps the workflows); a conflict fails the job and changes nothing | GitHub keeps scheduled runs off on a fork until enabled once in the Actions tab |
 
 The agent's trust boundary is the runner host: it works as the runner's user with the runner's SSH keys, under the rules
 of its task (read-only on the lab hosts, the live API only, no pushing or posting). Those rules are an instruction, not a
@@ -43,6 +45,7 @@ sandbox. Give it issues you would give a new contributor with the same access.
   `evidence/<owner>-<repo>-pr-<n>` on the fork (a PR elsewhere), and the same files as a run artifact.
 - A comment on the PR of the fork with the first 200 lines of the report and the second opinion; for a PR elsewhere,
   the same text in the run summary, ready to paste once the owner says so.
+- `VERDICT.md` and `verdict.json`: the merge-readiness class with its reasons and the facts it rests on.
 - `REVIEW.md`: the second opinion (verdict line: EVIDENCE SUPPORTS THE CLAIM / NO REGRESSION SHOWN, CLAIM NOT TESTED /
   EVIDENCE CONTRADICTS THE CLAIM / EVIDENCE UNRELIABLE), or `review-missing.txt` with the reason there is none.
 - For an issue: the agent's `REPRO.md`, `PR.md`, the task and the logs as a run artifact; a PR with `Closes #n` when the

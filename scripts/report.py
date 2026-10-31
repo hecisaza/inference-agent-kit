@@ -12,11 +12,12 @@ reply. The "what this run does not show" section lists the suites that did not r
 complete."""
 import argparse, html, json, os, re, statistics
 
-ALL_SUITES = ("smoke", "boundary", "cutin", "soak", "fault", "repro", "bench")
+ALL_SUITES = ("smoke", "boundary", "cutin", "perf", "soak", "fault", "repro", "bench")
 NOT_SHOWN = {"smoke": "basic answers, greedy repeat equality, streaming and JSON mode", "boundary": "reply equality at chunk ends and prefix-cache cases",
              "cutin": "a short request's first-token time behind a cold long prompt", "soak": "errors, canary mismatches and resource growth over time with client aborts",
              "fault": "a clean pair exit and recovery after an injected read fault", "bench": "throughput and latency against a control",
-             "repro": "whether the issue's reproduction command shows the problem on the control and not on the candidate"}
+             "repro": "whether the issue's reproduction command shows the problem on the control and not on the candidate",
+             "perf": "decode, prefill and aggregate throughput against the control"}
 HASH = re.compile(r"^[0-9a-f]{12}$")
 
 
@@ -120,6 +121,23 @@ def main():
                     md.append(f"`{cell(n)}` rep {i}: short question first token **{sh} s** (rounds {spread([x.get('short') for x in rd])}), long prompt first token {lg} s (rounds {spread([x.get('long') for x in rd])}); {len(rd)} rounds" + (f"; errors: {cell(r['errors'])}" if r.get("errors") else ""))
             charts["cutin.svg"] = bar_svg(bars, title="Cut-in: seconds to first token, a short question 3 s behind a cold long prompt")
             md.append("\n![cut-in](cutin.svg)")
+        elif s == "perf":
+            md.append("| target | rep | decode tok/s, one stream | prefill tok/s, cold long prompt | aggregate tok/s, concurrent streams | errors |\n|---|---|---|---|---|---|")
+            agg = {}
+            for n in names:
+                for i, r in enumerate(R[s].get(n, [])):
+                    d, p_, b = med(r.get("decode_tps")), med(r.get("prefill_tps")), med(r.get("batch_tps"))
+                    md.append(f"| `{cell(n)}` | {i} | **{d}** ({spread(r.get('decode_tps'))}) | **{p_}** ({spread(r.get('prefill_tps'))}; {r.get('prompt_tokens')} tokens) | **{b}** ({spread(r.get('batch_tps'))}; {r.get('streams')} streams) | {cell(r.get('errors') or '-')} |")
+                    for key, v in (("decode", d), ("prefill", p_), ("aggregate", b)): agg.setdefault(key, {}).setdefault(n, []).append(v)
+            if cand in R[s] and ctrl in R[s]:
+                parts = []
+                for key in ("decode", "prefill", "aggregate"):
+                    c, k = med(agg.get(key, {}).get(cand, [])), med(agg.get(key, {}).get(ctrl, []))
+                    if c and k: parts.append(f"{key} {((c - k) / k):+.1%}")
+                if parts: md.append(f"\n`{cell(cand)}` against `{cell(ctrl)}`: " + ", ".join(parts) + " (medians over repetitions; the verdict counts a difference only beyond the rounds' spread, at least ±3 %).")
+            for key, title in (("decode", "Decode: tokens per second, one stream"), ("prefill", "Prefill: prompt tokens per second, cold long prompt"), ("aggregate", "Aggregate: tokens per second over concurrent streams")):
+                charts[f"perf-{key}.svg"] = bar_svg([(f"{n} rep {i}", v, n == cand) for n in names for i, v in enumerate(agg.get(key, {}).get(n, []))], unit="tok/s", title=title)
+                md.append(f"\n![{key}](perf-{key}.svg)")
         elif s == "soak":
             bars = []
             for n in names:

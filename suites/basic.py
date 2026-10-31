@@ -1,4 +1,4 @@
-"""smoke, boundary, cutin and repro suites. Each run(ctx) returns a dict that pairtest writes to the report.
+"""smoke, boundary, cutin, perf and repro suites. Each run(ctx) returns a dict that pairtest writes to the report.
 
 ctx: dict(api, model, out (run directory), opts (suite options from the command line), log (callable))."""
 import json, subprocess, threading, time
@@ -93,4 +93,40 @@ def repro(ctx):
     return {"ok": shows == (role == "control"), "role": role, "exit": rc, "shows_problem": shows, "cmd": cmd, "output_tail": out[-2000:]}
 
 
-SUITES = {"smoke": smoke, "boundary": boundary, "cutin": cutin, "repro": repro}
+def perf(ctx):
+    """Throughput on fixed prompts, comparable between targets: decode tokens/s (one stream, 256 tokens), prefill
+    tokens/s (a cold long prompt, time to first token) and aggregate tokens/s over concurrent streams. Rounds from
+    opts (perf_rounds, default 3; perf_words, default 12000; perf_streams, default 4); the report gives medians and
+    spreads, the verdict compares candidate and control beyond the noise."""
+    api, model, opts = ctx["api"], ctx["model"], ctx["opts"]
+    rounds, n_words, streams = int(opts.get("perf_rounds", 3)), int(opts.get("perf_words", 12000)), int(opts.get("perf_streams", 4))
+    decode, prefill, batch, errs, ptoks = [], [], [], [], None
+    for k in range(rounds):
+        r = chat(api, model, [{"role": "user", "content": f"Describe a river valley through the four seasons in plain prose. Variant {k}."}], max_tokens=256, stream=True)
+        if r.get("error"):
+            errs.append(f"round {k} decode: {r['error']}")
+        elif r.get("completion_tokens") and r.get("ttft") is not None:
+            decode.append(round(r["completion_tokens"] / max(r["total"] - r["ttft"], 1e-3), 1))
+        p = chat(api, model, [{"role": "user", "content": words(n_words, 9000 + k)}], max_tokens=1, stream=True)
+        if p.get("error"):
+            errs.append(f"round {k} prefill: {p['error']}")
+        elif p.get("prompt_tokens") and p.get("ttft"):
+            prefill.append(round(p["prompt_tokens"] / p["ttft"], 1)); ptoks = p["prompt_tokens"]
+        out = [None] * streams
+        def one(i, k=k):  # noqa: E306
+            out[i] = chat(api, model, [{"role": "user", "content": f"List twenty animals with one fact each. Set {k}-{i}."}], max_tokens=128, stream=True)
+        ts = [threading.Thread(target=one, args=(i,)) for i in range(streams)]; t0 = time.time()
+        for t in ts: t.start()
+        for t in ts: t.join()
+        el = time.time() - t0
+        bad = [o.get("error") if o else "no reply" for o in out if o is None or o.get("error")]
+        if bad:
+            errs.append(f"round {k} batch: {bad[0]}")
+        else:
+            batch.append(round(sum(o.get("completion_tokens") or 0 for o in out) / max(el, 1e-3), 1))
+        ctx["log"](f"perf round {k}: decode {decode[-1:]} prefill {prefill[-1:]} aggregate {batch[-1:]} tok/s")
+    return {"ok": not errs and len(decode) == rounds and len(prefill) == rounds and len(batch) == rounds,
+            "decode_tps": decode, "prefill_tps": prefill, "batch_tps": batch, "prompt_tokens": ptoks, "streams": streams, "errors": errs}
+
+
+SUITES = {"smoke": smoke, "boundary": boundary, "cutin": cutin, "perf": perf, "repro": repro}

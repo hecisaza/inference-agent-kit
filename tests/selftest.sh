@@ -5,7 +5,7 @@ cd "$(dirname "$0")/.." || exit 1
 fail=0; ok() { echo "ok   $*"; }; bad() { echo "FAIL $*"; fail=1; }
 for f in scripts/*.sh tests/*.sh; do bash -n "$f" && ok "bash -n $f" || bad "bash -n $f"; done
 command -v shellcheck >/dev/null && { shellcheck -S warning scripts/*.sh tests/*.sh && ok shellcheck || bad shellcheck; }
-for f in scripts/pairtest scripts/canary.py suites/*.py evals/agent26/*.py; do python3 -m py_compile "$f" && ok "compile $f" || bad "compile $f"; done
+for f in scripts/pairtest scripts/*.py suites/*.py evals/agent26/*.py; do python3 -m py_compile "$f" && ok "compile $f" || bad "compile $f"; done
 if python3 -m pyflakes --version >/dev/null 2>&1; then python3 -m pyflakes scripts/pairtest scripts/*.py suites/*.py evals/agent26/*.py tests/*.py && ok "pyflakes clean" || bad "pyflakes"; else echo "note: pyflakes not installed (pip install pyflakes); skipping the undefined-name check"; fi
 python3 -c "import yaml; yaml.safe_load(open('lab.example.yaml')); yaml.safe_load(open('owner.example.yaml'))" && ok "example yaml parses" || bad "example yaml"
 out=$(python3 scripts/pairtest plan --lab lab.example.yaml --target control --dry 2>&1) && grep -q "tensorfold-dsv41:control" <<<"$out" && ok "pairtest plan (dry, inherit)" || bad "pairtest plan: $out"
@@ -48,6 +48,7 @@ r=$(python3 scripts/pairtest run --lab tests/lab-fake.yaml --target b --compare 
 rep=$(ls -dt /tmp/selftest-runs/2*/ 2>/dev/null | head -1)
 [ "$rc" = 0 ] && grep -qE "\*\*19 of 19\*\*" "$rep/report.md" 2>/dev/null && ok "pairtest run (command backend, two local fake servers): exit 0, 19 of 19 hashes identical" || bad "pairtest run: rc=$rc $(echo "$r" | tail -4)"
 grep -q "candidate" "$rep/report.md" && grep -q "Restore: live kept running (the last target, a, is the live configuration)" "$rep/report.md" && [ -s "$rep/report.html" ] && grep -q "does not show" "$rep/report.md" && ok "report.py: candidate/control from meta, live kept running when the control is live, limits list, html written" || bad "report.py output incomplete"
+python3 scripts/verdict.py "$rep" > /tmp/selftest-verdict.txt 2>&1 && grep -q "Merge readiness: SAFE, UNVERIFIED" /tmp/selftest-verdict.txt && ok "verdict.py: green run without a claim test or a second opinion -> SAFE, UNVERIFIED" || bad "verdict unverified: $(cat /tmp/selftest-verdict.txt)"
 curl -s -m 3 http://127.0.0.1:18611/v1/models | grep -q fake-model && ok "live restored after the run" || bad "live not restored"
 curl -s -m 2 http://127.0.0.1:18612/v1/models >/dev/null 2>&1 && bad "the tested target (port 18612) was left running" || ok "the tested target was stopped before live was restored"
 # config_hash: image: and env.IMAGE are the same configuration; a different env or recipe_dir is not
@@ -82,6 +83,39 @@ rep=$(ls -dt /tmp/selftest-runs/2*/ 2>/dev/null | head -1)
 r=$(python3 scripts/pairtest run --lab tests/lab-fake.yaml --target bad --compare a --suite repro --opt "repro_cmd=bash tests/fake-repro.sh {api} {model}" --runs /tmp/selftest-runs 2>&1); rc=$?
 rep=$(ls -dt /tmp/selftest-runs/2*/ 2>/dev/null | head -1)
 [ "$rc" = 1 ] && echo "$r" | grep -q "NOT OK: bad/repro" && grep -q "Not reproduced on the control" "$rep/report.md" && ok "repro suite: the inverse (candidate shows it, control does not) fails the run and says the control did not reproduce" || bad "repro suite inverse: rc=$rc"
+# verdict.py: the repro run (control shows, candidate does not) + a supporting second opinion -> READY; the inverse run -> NOT READY;
+# no repro and no review -> SAFE, UNVERIFIED; a collision line naming the PR -> NOT READY; a failed restore -> RERUN
+vd=$(mktemp -d); good=$(ls -dt /tmp/selftest-runs/2*/ | sed -n 2p); inv=$(ls -dt /tmp/selftest-runs/2*/ | sed -n 1p)
+echo "**EVIDENCE SUPPORTS THE CLAIM** — the fake reviewer agrees." > "$vd/REVIEW.md"
+python3 scripts/verdict.py "$good" --review "$vd/REVIEW.md" > "$vd/o1" 2>&1 && grep -q "Merge readiness: READY" "$vd/o1" && grep -q '"label": "evidence:ready"' "$good/verdict.json" && ok "verdict.py: repro confirmed + supporting second opinion -> READY" || bad "verdict READY: $(cat "$vd/o1")"
+python3 scripts/verdict.py "$inv" > "$vd/o2" 2>&1 && grep -q "Merge readiness: NOT READY" "$vd/o2" && ok "verdict.py: the candidate that still shows the problem -> NOT READY" || bad "verdict NOT READY: $(cat "$vd/o2")"
+printf 'COLLISION: patch 0040 is added by #7 #9\n' > "$vd/sync.txt"
+python3 scripts/verdict.py "$good" --review "$vd/REVIEW.md" --sync "$vd/sync.txt" --pr 7 > "$vd/o3" 2>&1 && grep -q "NOT READY.*collides" "$vd/o3" && ok "verdict.py: a patch-number collision naming the PR -> NOT READY" || bad "verdict collision: $(cat "$vd/o3")"
+python3 - "$good" "$vd" <<'PY'
+import json, sys, shutil, os
+src, d = sys.argv[1], sys.argv[2]; os.makedirs(d + "/rerun", exist_ok=True)
+R = json.load(open(os.path.join(src, "results.json"))); R["meta"]["restore"] = "RESTORE FAILED: boom"; json.dump(R, open(d + "/rerun/results.json", "w"))
+PY
+python3 scripts/verdict.py "$vd/rerun" > "$vd/o4" 2>&1 && grep -q "Merge readiness: RERUN" "$vd/o4" && ok "verdict.py: a failed restore -> RERUN" || bad "verdict RERUN: $(cat "$vd/o4")"
+rm -rf "$vd"
+# perf suite against the fake servers: numbers come out, no errors, the report has the table
+r=$(python3 scripts/pairtest run --lab tests/lab-fake.yaml --target a --compare b --suite perf --opt perf_rounds=1 --opt perf_words=40 --opt perf_streams=2 --runs /tmp/selftest-runs 2>&1); rc=$?
+rep=$(ls -dt /tmp/selftest-runs/2*/ 2>/dev/null | head -1)
+[ "$rc" = 0 ] && grep -q "decode tok/s" "$rep/report.md" && [ -s "$rep/perf-decode.svg" ] && ok "perf suite: decode, prefill and aggregate measured on both targets, charts written" || bad "perf suite: rc=$rc $(echo "$r" | tail -3)"
+# verdict.py on performance: a candidate 10 % slower -> NOT READY (slower); 10 % faster with everything green -> READY (faster)
+pv=$(mktemp -d); python3 - "$rep" "$pv" <<'PY'
+import json, os, sys
+src, d = sys.argv[1], sys.argv[2]
+R = json.load(open(os.path.join(src, "results.json"))); cand, ctrl = R["meta"]["candidate"], R["meta"]["control"]
+base = {"ok": True, "decode_tps": [100.0, 101.0, 99.0], "prefill_tps": [1000.0, 1010.0, 990.0], "batch_tps": [300.0, 303.0, 297.0], "errors": []}
+for name, f in (("slow", 0.9), ("fast", 1.1)):
+    os.makedirs(f"{d}/{name}", exist_ok=True); X = json.loads(json.dumps(R))
+    X["perf"] = {ctrl: [base], cand: [{**base, "decode_tps": [v * f for v in base["decode_tps"]], "prefill_tps": [v * f for v in base["prefill_tps"]], "batch_tps": [v * f for v in base["batch_tps"]]}]}
+    json.dump(X, open(f"{d}/{name}/results.json", "w"))
+PY
+python3 scripts/verdict.py "$pv/slow" > "$pv/o1" 2>&1 && grep -q "NOT READY.*slower than the control" "$pv/o1" && ok "verdict.py: a 10 % slowdown beyond the noise -> NOT READY" || bad "verdict slow: $(cat "$pv/o1")"
+python3 scripts/verdict.py "$pv/fast" > "$pv/o2" 2>&1 && grep -q "READY.*faster than the control" "$pv/o2" && ! grep -q "NOT READY" "$pv/o2" && ok "verdict.py: a 10 % speed-up with everything green -> READY" || bad "verdict fast: $(cat "$pv/o2")"
+rm -rf "$pv"
 # evidence-review.sh: bundle (diff, report, results, suites, run facts) + a fake reviewer -> REVIEW.md next to the run
 er=$(mktemp -d); git init -q "$er/co"; echo a > "$er/co/f"; git -C "$er/co" add f; git -C "$er/co" -c user.name=t -c user.email=t@example.com commit -q -m base
 echo b > "$er/co/f"; git -C "$er/co" -c user.name=t -c user.email=t@example.com commit -q -am head
