@@ -135,7 +135,21 @@ r=$(AGENT_CMD="bash $PWD/tests/fake-claim-agent.sh" GH_TOKEN=should-not-reach-th
 [ "$rc" = 0 ] && grep -q "RESULT: claim /tmp/selftest-claim.sh" <<<"$r" && grep -q "CLAIM: does not hold" "$cr/claim/base-run.txt" && [ -x /tmp/selftest-claim.sh ] && ok "claim-agent: claim test written, fails on the base, accepted" || bad "claim-agent accept: rc=$rc $(tail -3 <<<"$r")"
 r=$(AGENT_CMD="bash $PWD/tests/fake-claim-agent.sh" LIVE_API=http://127.0.0.1:18611/v1 LIVE_MODEL=fake-model bash scripts/claim-agent.sh "$cr" --pr-url https://example.invalid/pull/1 --out /tmp/selftest-claim2.sh 2>&1); rc=$?
 [ "$rc" = 0 ] && grep -q "RESULT: no-claim after two rounds: the claim already holds on the base" <<<"$r" && [ ! -e /tmp/selftest-claim2.sh ] && grep -q "Correction (round 2)" "$cr/claim/TASK.md" && ok "claim-agent: a claim that already holds on the base is refused after one correction round" || bad "claim-agent refuse: rc=$rc $(tail -3 <<<"$r")"
+r=$(FAKE_CLAIM=decline AGENT_CMD="bash $PWD/tests/fake-claim-agent.sh" LIVE_API=http://127.0.0.1:18612/v1 LIVE_MODEL=fake-model bash scripts/claim-agent.sh "$cr" --pr-url https://example.invalid/pull/1 --out /tmp/selftest-claim3.sh 2>&1); rc=$?
+[ "$rc" = 0 ] && grep -q "RESULT: no-claim declined by the agent: the change is only observable in the server log" <<<"$r" && [ ! -e /tmp/selftest-claim3.sh ] && ok "claim-agent: the agent may decline with NO-CLAIM.md; nothing is accepted" || bad "claim-agent decline: rc=$rc $(tail -2 <<<"$r")"
 kill "$cbad" 2>/dev/null; rm -f /tmp/selftest-claim.sh
+# verdict.py: a claim test (claims/) that fails on both builds is inconclusive -> SAFE, UNVERIFIED, not NOT READY
+vc=$(mktemp -d); python3 - "$cr" "$vc" <<'PY'
+import json, os, sys
+src, d = sys.argv[1], sys.argv[2]
+R = json.load(open(os.path.join(src, "results.json"))); cand, ctrl = R["meta"]["candidate"], R["meta"]["control"]
+R["meta"]["opts"]["repro_cmd"] = "bash claim.sh {api} {model}"
+R["repro"] = {cand: [{"ok": False, "role": "candidate", "exit": 1, "shows_problem": True, "cmd": "bash claim.sh", "output_tail": "CLAIM: does not hold"}],
+              ctrl: [{"ok": True, "role": "control", "exit": 1, "shows_problem": True, "cmd": "bash claim.sh", "output_tail": "CLAIM: does not hold"}]}
+json.dump(R, open(os.path.join(d, "results.json"), "w"))
+PY
+python3 scripts/verdict.py "$vc" > "$vc/o" 2>&1 && grep -q "SAFE, UNVERIFIED.*fails on both builds" "$vc/o" && ok "verdict.py: a claim test failing on both builds is inconclusive (SAFE, UNVERIFIED), not NOT READY" || bad "verdict inconclusive claim: $(cat "$vc/o")"
+rm -rf "$vc"
 # issue-agent.sh with a fake agent and a fake gh: a local bare "origin", the live build = the bad server (shows the problem)
 nohup python3 tests/fake_server.py 18612 --wrong > /dev/null 2>&1 &
 badpid=$!; sleep 0.7

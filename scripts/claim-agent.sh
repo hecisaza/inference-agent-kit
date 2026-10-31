@@ -5,7 +5,10 @@
 # request's diff and description, the second opinion (which names what would exercise the change) and the report. The
 # agent works in RUN_DIR/claim/ with the task from templates/CLAIM-TASK.md, holds no token, and leaves claim.sh. This
 # script then runs claim.sh against the live build (the base): it must print "CLAIM: does not hold" and exit 1 there,
-# or the test does not isolate the change; the agent gets one correction round. The accepted script is copied to --out
+# or the test does not isolate the change; the agent gets one correction round. The agent may instead decline with
+# NO-CLAIM.md ("NO-CLAIM: <reason>") when the change cannot be exercised through the API (fault paths, server logs):
+# a script that can never print "CLAIM: holds" is not a test, and the verdict treats a claim that fails on both builds
+# as inconclusive, never as evidence against the pull request. The accepted script is copied to --out
 # (default RUN_DIR/claim.sh) for the workflow to commit under claims/ and rerun the pipeline with it as the repro suite.
 #
 # Environment: AGENT_CMD (default: Claude Code headless), AGENT_TIMEOUT_S (default 1800), LIVE_API, LIVE_MODEL (required).
@@ -39,6 +42,9 @@ run_agent() {  # $1: round
   ( cd "$w" && env -u GH_TOKEN -u GITHUB_TOKEN timeout "$timeout_s" bash -c "$AGENT_CMD" < TASK.md > "agent-round$1.log" 2>&1 ); local rc=$?
   log "agent exit $rc"
 }
+declined() {  # the agent may decline: NO-CLAIM.md, first line "NO-CLAIM: <why the claim cannot be exercised through the API>"
+  [ -s "$w/NO-CLAIM.md" ] && head -1 "$w/NO-CLAIM.md" | grep -q "^NO-CLAIM:"
+}
 check_on_base() {  # the script must say the claim does not hold on the base, and exit 1
   [ -s "$w/claim.sh" ] || { verdict="no claim.sh written"; return 1; }
   bash -n "$w/claim.sh" 2>"$w/syntax.txt" || { verdict="claim.sh does not parse: $(head -1 "$w/syntax.txt")"; return 1; }
@@ -51,12 +57,14 @@ check_on_base() {  # the script must say the claim does not hold on the base, an
 
 verdict=""
 run_agent 1
+declined && done_ "no-claim declined by the agent: $(head -1 "$w/NO-CLAIM.md" | sed 's/^NO-CLAIM: *//' | cut -c1-300)"
 if ! check_on_base; then
   log "round 1: $verdict"
   { echo; echo "## Correction (round 2)"; echo; echo "Your first claim.sh was run against the base at $LIVE_API: $verdict."
     echo "Fix it so that on the base it prints 'CLAIM: does not hold' and exits 1, and on a build with the change it would print 'CLAIM: holds' and exit 0. Its output on the base follows."; echo
     echo '```'; tail -40 "$w/base-run.txt" 2>/dev/null; echo '```'; } >> "$w/TASK.md"
   run_agent 2
+  declined && done_ "no-claim declined by the agent in round 2: $(head -1 "$w/NO-CLAIM.md" | sed 's/^NO-CLAIM: *//' | cut -c1-300)"
   check_on_base || done_ "no-claim after two rounds: $verdict"
 fi
 # nothing private may leave: an address or user@host in the script stops here

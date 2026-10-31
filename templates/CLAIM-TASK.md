@@ -16,7 +16,15 @@ claim holds. Read `{{KIT}}/AGENTS.md` first; it applies here.
 - A claim follows evidence: test what `PR.md` says, with the request that reaches the changed code, not a request that
   happens to work.
 
-## What to produce
+## When the claim cannot be exercised through the API: decline
+
+Some changes are only observable with a fault injected into the server, in the server's own logs, or in scripts that
+never serve a request (prepare, start, stop). For those, do **not** write a script: a `claim.sh` that can never print
+`CLAIM: holds` on any build is not a test, and it would be run against the pull request as if it were one. Write
+`NO-CLAIM.md` instead, first line `NO-CLAIM: <one sentence: why the API cannot observe this change>`, then what would
+observe it (a fault hook, a log line, a unit test in the repository). That is a correct and useful answer.
+
+## What to produce (when the claim can be exercised)
 
 `claim.sh` in this directory, called as `claim.sh API MODEL`:
 - bash with curl or python3 only; deterministic (temperature 0, fixed inputs); finished in under ten minutes;
@@ -42,7 +50,7 @@ echo "reply: ${r:0:300}"
 if <the condition the pull request changes>; then echo "CLAIM: holds"; exit 0; else echo "CLAIM: does not hold"; exit 1; fi
 ```
 
-Stop when `claim.sh` exists and you have run it once. Do not commit anything.
+Stop when `claim.sh` exists and you have run it once, or when `NO-CLAIM.md` exists. Do not commit anything.
 
 ## Materials in this directory
 

@@ -92,17 +92,20 @@ def main():
     identical = total == 0 or same == total
 
     repro = None
+    kind = "claim" if "claim.sh" in str(meta.get("opts", {}).get("repro_cmd", "")) else "repro"
     if "repro" in R and cand in R["repro"]:
         c = R["repro"][cand][0]; k = (R["repro"].get(ctrl) or [None])[0]
         if c.get("skipped"):
             repro = None
+        elif c.get("shows_problem") and kind == "claim" and (k is None or k.get("shows_problem")):
+            repro = "inconclusive"   # a claim test that fails on both builds observes nothing
         elif c.get("shows_problem"):
             repro = "still present"
         elif k is not None and not k.get("shows_problem"):
             repro = "not reproduced on the base"
         else:
             repro = "confirmed"
-        facts.append(f"claim / repro script: {repro}" if repro else "claim / repro script: skipped")
+        facts.append(f"{kind} script: {repro}" if repro else f"{kind} script: skipped")
 
     perf = performance(R, cand, ctrl) if cand and ctrl else []
     slow = [x for x in perf if x["call"] == "slower"]; fast = [x for x in perf if x["call"] == "faster"]
@@ -145,7 +148,8 @@ def main():
                            + ((", faster than the control: " + ", ".join(f"{x['metric']} {x['delta']:+.0%}" for x in fast)) if fast else ""))
         else:
             cls = "SAFE, UNVERIFIED"
-            reasons.append("no regression, no slowdown; " + ("the claim or reproduction script passes on the base too, so it does not isolate the change" if repro == "not reproduced on the base"
+            reasons.append("no regression, no slowdown; " + ("the claim test fails on both builds: it does not observe the change (not evidence against the pull request)" if repro == "inconclusive"
+                           else "the claim or reproduction script passes on the base too, so it does not isolate the change" if repro == "not reproduced on the base"
                            else "the changed path was not exercised by any suite" + (" (second opinion: claim not tested)" if rv and "NOT TESTED" in rv else "")))
     label = a.label_prefix + LABEL[cls]
     head = f"**Merge readiness: {cls}** — {'; '.join(reasons)}."

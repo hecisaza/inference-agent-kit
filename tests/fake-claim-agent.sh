@@ -4,6 +4,7 @@
 set -euo pipefail
 cat > /dev/null
 [ -z "${GH_TOKEN:-}${GITHUB_TOKEN:-}" ] || { echo "the agent was given a token" >&2; exit 3; }
+if [ "${FAKE_CLAIM:-}" = decline ]; then printf 'NO-CLAIM: the change is only observable in the server log, which the API does not expose.\n' > NO-CLAIM.md; echo "fake claim agent declined"; exit 0; fi
 cat > claim.sh <<'SH'
 #!/usr/bin/env bash
 # claim: the fake fix — 17*23 is answered 391. Exercised by: one chat request. From REVIEW.md §2: the arithmetic path.
