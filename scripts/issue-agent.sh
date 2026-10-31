@@ -93,11 +93,12 @@ if [ "$VERDICT" = reproduced ]; then
   git -C repo ls-files --error-unmatch "$SCRIPT" >/dev/null 2>&1 || fail "$SCRIPT is not committed"
   if [ "$LIVE_CHECK" = 1 ]; then
     # the confirmation: the live build (the base) must show the problem with the agent's own script
-    set +e; ( cd repo && timeout 900 bash "$SCRIPT" "$LIVE_API" "$LIVE_MODEL" ) > live-repro.log 2>&1; lrc=$?; set -e
+    set +e; ( cd repo && env -u GH_TOKEN -u GITHUB_TOKEN timeout 900 bash "$SCRIPT" "$LIVE_API" "$LIVE_MODEL" ) > live-repro.log 2>&1; lrc=$?; set -e   # no publishing credentials for a generated script
     log "repro script against the live build: exit $lrc"
-    if [ "$lrc" = 0 ]; then
+    if [ "$lrc" != 1 ]; then
       VERDICT=unclear
-      printf 'VERDICT: unclear\n\nThe agent reported the problem as reproduced, but its reproduction script does not show it on the live build (exit 0). The agent'"'"'s notes follow.\n\n' > REPRO.md
+      if [ "$lrc" = 0 ]; then why="does not show it on the live build (exit 0)"; else why="errored on the live build (exit $lrc), so it judged nothing"; fi
+      printf 'VERDICT: unclear\n\nThe agent reported the problem as reproduced, but its reproduction script %s. The agent'"'"'s notes follow.\n\n' "$why" > REPRO.md
       tail -n +2 repo/REPRO.md >> REPRO.md
     fi
   fi

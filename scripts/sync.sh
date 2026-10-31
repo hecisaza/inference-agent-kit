@@ -34,7 +34,7 @@ done | sort > "$tmp"
 if [[ -s "$tmp" ]]; then
   column -t -s $'\t' "$tmp"
   echo
-  dup=$(cut -f1 "$tmp" | sort | uniq -d)
+  dup=$(cut -f1 "$tmp" | sort | uniq -d | while read -r d; do echo "$nums" | grep -qx "$d" || echo "$d"; done)   # numbers already on main are changes, reported below, not collisions
   for d in $dup; do echo "COLLISION: patch $d is added by $(awk -F'\t' -v d="$d" '$1==d{print $2}' "$tmp" | sort -u | tr '\n' ' ')"; done
   for d in $(cut -f1 "$tmp" | sort -u); do echo "$nums" | grep -qx "$d" && echo "NOTE: open PR touches $d, which is already on $BR (a change to it, or a number clash): $(awk -F'\t' -v d="$d" '$1==d{print $2" "$3}' "$tmp" | sort -u | tr '\n' ' ')"; done
   hi=$( (echo "$nums"; cut -f1 "$tmp") | sort -u | tail -1 )

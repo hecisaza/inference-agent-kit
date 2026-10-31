@@ -45,9 +45,10 @@ rm -rf "$d"
 export KIT=$PWD
 for port in 18611 18612; do pgrep -f "fake_server.py $port" | xargs -r kill 2>/dev/null; done; sleep 0.5
 r=$(python3 scripts/pairtest run --lab tests/lab-fake.yaml --target b --compare a --suite smoke,boundary --runs /tmp/selftest-runs 2>&1); rc=$?
-rep=$(ls -dt /tmp/selftest-runs/2*/ 2>/dev/null | head -1)
+rep=$(ls -dt /tmp/selftest-runs/2*/ 2>/dev/null | head -1); full_run=$rep
 [ "$rc" = 0 ] && grep -qE "\*\*19 of 19\*\*" "$rep/report.md" 2>/dev/null && ok "pairtest run (command backend, two local fake servers): exit 0, 19 of 19 hashes identical" || bad "pairtest run: rc=$rc $(echo "$r" | tail -4)"
-grep -q "candidate" "$rep/report.md" && grep -q "Restore: live kept running (the last target, a, is the live configuration)" "$rep/report.md" && [ -s "$rep/report.html" ] && grep -q "does not show" "$rep/report.md" && ok "report.py: candidate/control from meta, live kept running when the control is live, limits list, html written" || bad "report.py output incomplete"
+awk '/stop on here: pkill -f .fake_server.py 1861\[1\]/{s=NR} /start on here: nohup python3 .*18612/{if(!t)t=NR} END{exit !(s && t && s < t)}' "$rep/log.txt" && ok "the first target stops the live configuration before it starts" || bad "live was not stopped before the first target: $(grep -nE 'stop on|start on' "$rep/log.txt" | head -4)"
+grep -q "candidate" "$rep/report.md" && grep -q "Restore: live kept running (the last target, a, is the live configuration; verified up)" "$rep/report.md" && [ -s "$rep/report.html" ] && grep -q "does not show" "$rep/report.md" && ok "report.py: candidate/control from meta, live kept running when the control is live, limits list, html written" || bad "report.py output incomplete"
 python3 scripts/verdict.py "$rep" > /tmp/selftest-verdict.txt 2>&1 && grep -q "Merge readiness: SAFE, UNVERIFIED" /tmp/selftest-verdict.txt && ok "verdict.py: green run without a claim test or a second opinion -> SAFE, UNVERIFIED" || bad "verdict unverified: $(cat /tmp/selftest-verdict.txt)"
 curl -s -m 3 http://127.0.0.1:18611/v1/models | grep -q fake-model && ok "live restored after the run" || bad "live not restored"
 curl -s -m 2 http://127.0.0.1:18612/v1/models >/dev/null 2>&1 && bad "the tested target (port 18612) was left running" || ok "the tested target was stopped before live was restored"
@@ -88,7 +89,7 @@ rep=$(ls -dt /tmp/selftest-runs/2*/ 2>/dev/null | head -1)
 vd=$(mktemp -d); good=$(ls -dt /tmp/selftest-runs/2*/ | sed -n 2p); inv=$(ls -dt /tmp/selftest-runs/2*/ | sed -n 1p)
 echo "**EVIDENCE SUPPORTS THE CLAIM** — the fake reviewer agrees." > "$vd/REVIEW.md"
 python3 scripts/verdict.py "$good" --review "$vd/REVIEW.md" > "$vd/o1" 2>&1 && grep -q "Merge readiness: READY" "$vd/o1" && grep -q '"label": "evidence:ready"' "$good/verdict.json" && ok "verdict.py: repro confirmed + supporting second opinion -> READY" || bad "verdict READY: $(cat "$vd/o1")"
-python3 scripts/verdict.py "$inv" > "$vd/o2" 2>&1 && grep -q "Merge readiness: NOT READY" "$vd/o2" && ok "verdict.py: the candidate that still shows the problem -> NOT READY" || bad "verdict NOT READY: $(cat "$vd/o2")"
+python3 scripts/verdict.py "$inv" > "$vd/o2" 2>&1 && grep -q "Merge readiness: NOT READY.*passes on the base and fails on the candidate" "$vd/o2" && ok "verdict.py: the candidate fails where the base passes -> NOT READY (regression)" || bad "verdict NOT READY: $(cat "$vd/o2")"
 printf 'COLLISION: patch 0040 is added by #7 #9\n' > "$vd/sync.txt"
 python3 scripts/verdict.py "$good" --review "$vd/REVIEW.md" --sync "$vd/sync.txt" --pr 7 > "$vd/o3" 2>&1 && grep -q "NOT READY.*collides" "$vd/o3" && ok "verdict.py: a patch-number collision naming the PR -> NOT READY" || bad "verdict collision: $(cat "$vd/o3")"
 python3 - "$good" "$vd" <<'PY'
@@ -114,7 +115,9 @@ for name, f in (("slow", 0.9), ("fast", 1.1)):
     json.dump(X, open(f"{d}/{name}/results.json", "w"))
 PY
 python3 scripts/verdict.py "$pv/slow" > "$pv/o1" 2>&1 && grep -q "NOT READY.*slower than the control" "$pv/o1" && ok "verdict.py: a 10 % slowdown beyond the noise -> NOT READY" || bad "verdict slow: $(cat "$pv/o1")"
-python3 scripts/verdict.py "$pv/fast" > "$pv/o2" 2>&1 && grep -q "READY.*faster than the control" "$pv/o2" && ! grep -q "NOT READY" "$pv/o2" && ok "verdict.py: a 10 % speed-up with everything green -> READY" || bad "verdict fast: $(cat "$pv/o2")"
+printf 'Faster prefill\n\nThis change raises prefill throughput.\n' > "$pv/PR-perf.md"; printf 'Docs\n\nA wording fix.\n' > "$pv/PR-docs.md"
+python3 scripts/verdict.py "$pv/fast" --pr-file "$pv/PR-perf.md" > "$pv/o2" 2>&1 && grep -q "READY.*faster than the control as the PR claims" "$pv/o2" && ! grep -q "NOT READY" "$pv/o2" && ok "verdict.py: a 10 % speed-up on a PR that claims performance -> READY" || bad "verdict fast: $(cat "$pv/o2")"
+python3 scripts/verdict.py "$pv/fast" --pr-file "$pv/PR-docs.md" > "$pv/o3" 2>&1 && grep -q "SAFE, UNVERIFIED.*noted but not counted" "$pv/o3" && ok "verdict.py: a speed-up on a PR that does not claim performance is noted, not counted" || bad "verdict fast/no-claim: $(cat "$pv/o3")"
 rm -rf "$pv"
 # evidence-review.sh: bundle (diff, report, results, suites, run facts) + a fake reviewer -> REVIEW.md next to the run
 er=$(mktemp -d); git init -q "$er/co"; echo a > "$er/co/f"; git -C "$er/co" add f; git -C "$er/co" -c user.name=t -c user.email=t@example.com commit -q -m base
@@ -128,16 +131,38 @@ REVIEWER=/bin/false bash scripts/evidence-review.sh "$rep" --checkout "$er/co" -
 rm -rf "$er"
 # claim-agent.sh with a fake agent: against a base that answers wrongly the claim test is accepted; against a base where
 # the claim already holds it is refused after the correction round (does not isolate the change)
+rm -f /tmp/selftest-claim.sh /tmp/selftest-claim2.sh /tmp/selftest-claim3.sh
 nohup python3 tests/fake_server.py 18612 --wrong > /dev/null 2>&1 &
 cbad=$!; sleep 0.7
 cr=$(ls -dt /tmp/selftest-runs/2*/ 2>/dev/null | head -1)   # the run that evidence-review.sh bundled (review/pr.patch, PR.md)
 r=$(AGENT_CMD="bash $PWD/tests/fake-claim-agent.sh" GH_TOKEN=should-not-reach-the-agent LIVE_API=http://127.0.0.1:18612/v1 LIVE_MODEL=fake-model bash scripts/claim-agent.sh "$cr" --pr-url https://example.invalid/pull/1 --out /tmp/selftest-claim.sh 2>&1); rc=$?
 [ "$rc" = 0 ] && grep -q "RESULT: claim /tmp/selftest-claim.sh" <<<"$r" && grep -q "CLAIM: does not hold" "$cr/claim/base-run.txt" && [ -x /tmp/selftest-claim.sh ] && ok "claim-agent: claim test written, fails on the base, accepted" || bad "claim-agent accept: rc=$rc $(tail -3 <<<"$r")"
 r=$(AGENT_CMD="bash $PWD/tests/fake-claim-agent.sh" LIVE_API=http://127.0.0.1:18611/v1 LIVE_MODEL=fake-model bash scripts/claim-agent.sh "$cr" --pr-url https://example.invalid/pull/1 --out /tmp/selftest-claim2.sh 2>&1); rc=$?
-[ "$rc" = 0 ] && grep -q "RESULT: no-claim after two rounds: the claim already holds on the base" <<<"$r" && [ ! -e /tmp/selftest-claim2.sh ] && grep -q "Correction (round 2)" "$cr/claim/TASK.md" && ok "claim-agent: a claim that already holds on the base is refused after one correction round" || bad "claim-agent refuse: rc=$rc $(tail -3 <<<"$r")"
+[ "$rc" = 0 ] && grep -q "RESULT: no-claim after two rounds: the claim already holds on the base" <<<"$r" && [ ! -e /tmp/selftest-claim2.sh ] && grep -q "Correction (round 2)" "$cr/claim/TASK.md" && ok "claim-agent: a claim that already holds on the base is refused after one correction round" || bad "claim-agent refuse: rc=$rc result=$(grep -c 'no-claim after two rounds' <<<"$r") out2=$([ -e /tmp/selftest-claim2.sh ] && echo exists || echo absent) correction=$(grep -c 'Correction (round 2)' "$cr/claim/TASK.md" 2>&1 | head -1)"
 r=$(FAKE_CLAIM=decline AGENT_CMD="bash $PWD/tests/fake-claim-agent.sh" LIVE_API=http://127.0.0.1:18612/v1 LIVE_MODEL=fake-model bash scripts/claim-agent.sh "$cr" --pr-url https://example.invalid/pull/1 --out /tmp/selftest-claim3.sh 2>&1); rc=$?
 [ "$rc" = 0 ] && grep -q "RESULT: no-claim declined by the agent: the change is only observable in the server log" <<<"$r" && [ ! -e /tmp/selftest-claim3.sh ] && ok "claim-agent: the agent may decline with NO-CLAIM.md; nothing is accepted" || bad "claim-agent decline: rc=$rc $(tail -2 <<<"$r")"
-kill "$cbad" 2>/dev/null; rm -f /tmp/selftest-claim.sh
+kill "$cbad" 2>/dev/null; rm -f /tmp/selftest-claim.sh /tmp/selftest-claim2.sh /tmp/selftest-claim3.sh
+# verdict.py: a missing control result is an incomplete run -> RERUN, and a blocker seen on the candidate is kept in the reasons
+vi=$(mktemp -d); python3 - "$full_run" "$vi" <<'PY'
+import json, os, sys
+src, d = sys.argv[1], sys.argv[2]
+R = json.load(open(os.path.join(src, "results.json"))); cand, ctrl = R["meta"]["candidate"], R["meta"]["control"]
+R["meta"]["suites"] = ["smoke", "boundary"]; R["boundary"] = {cand: R["boundary"][cand]}   # the control never ran boundary
+R["smoke"][cand][0]["ok"] = False   # and the candidate failed smoke
+json.dump(R, open(os.path.join(d, "results.json"), "w"))
+PY
+python3 scripts/verdict.py "$vi" > "$vi/o" 2>&1 && grep -q "Merge readiness: RERUN.*incomplete run: boundary on a: 0 of 1" "$vi/o" && grep -q "also observed: smoke failed on the candidate" "$vi/o" && ok "verdict.py: an incomplete matrix -> RERUN, blockers kept" || bad "verdict incomplete: $(cat "$vi/o")"
+python3 - "$full_run" "$vi" <<'PY'
+import json, os, sys
+src, d = sys.argv[1], sys.argv[2]
+R = json.load(open(os.path.join(src, "results.json"))); cand, ctrl = R["meta"]["candidate"], R["meta"]["control"]
+R["meta"]["opts"]["repro_cmd"] = "bash tests/repro-issue-1.sh {api} {model}"
+R["repro"] = {cand: [{"ok": True, "role": "candidate", "exit": 0, "outcome": "passes", "shows_problem": False, "cmd": "x", "output_tail": ""}],
+              ctrl: [{"ok": False, "role": "control", "exit": 127, "outcome": "error", "shows_problem": False, "cmd": "x", "output_tail": "bash: x: command not found"}]}
+json.dump(R, open(os.path.join(d, "results.json"), "w"))
+PY
+python3 scripts/verdict.py "$vi" > "$vi/o2" 2>&1 && grep -q "SAFE, UNVERIFIED.*errored on a build: inconclusive" "$vi/o2" && grep -q "repro script: inconclusive" "$vi/VERDICT.md" && ! grep -q "Merge readiness: READY" "$vi/o2" && ok "verdict.py: a repro script that errors on the base is inconclusive, never READY" || bad "verdict repro error: $(cat "$vi/o2") $(grep script "$vi/VERDICT.md")"
+rm -rf "$vi"
 # verdict.py: a claim test (claims/) that fails on both builds is inconclusive -> SAFE, UNVERIFIED, not NOT READY
 vc=$(mktemp -d); python3 - "$cr" "$vc" <<'PY'
 import json, os, sys

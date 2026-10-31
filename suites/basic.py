@@ -1,7 +1,7 @@
 """smoke, boundary, cutin, perf and repro suites. Each run(ctx) returns a dict that pairtest writes to the report.
 
 ctx: dict(api, model, out (run directory), opts (suite options from the command line), log (callable))."""
-import json, subprocess, threading, time
+import json, os, subprocess, threading, time
 from common import chat, words
 
 
@@ -74,9 +74,12 @@ def cutin(ctx):
 
 
 def repro(ctx):
-    """Runs an issue's reproduction command against the target (opts repro_cmd; {api} {model} {out} {role} are filled
-    in). Exit 0 means the problem does not show, anything else means it does. The suite is ok when the result is what
-    the target's role predicts: the control (the base) shows the problem, the candidate (the fix) does not."""
+    """Runs an issue's reproduction or a claim command against the target (opts repro_cmd; {api} {model} {out} {role}
+    are filled in). Typed outcome: exit 0 = passes (the problem does not show / the claim holds), exit 1 = fails (the
+    problem shows / the claim does not hold), anything else (a timeout, exit 2, a missing command) = error: the script
+    could not judge, and the verdict treats that as inconclusive, never as a reproduction. The suite is ok when the
+    outcome is what the target's role predicts: the control (the base) fails, the candidate (the fix) passes. The
+    command runs without publishing credentials in its environment."""
     cmd = ctx["opts"].get("repro_cmd")
     if not cmd:
         return {"ok": False, "skipped": "no repro_cmd (pass --opt repro_cmd='bash tests/repro-issue-N.sh {api} {model}')"}
@@ -84,13 +87,15 @@ def repro(ctx):
     full = cmd
     for k, v in (("{api}", ctx["api"]), ("{model}", ctx["model"]), ("{out}", ctx["out"]), ("{role}", role)):
         full = full.replace(k, str(v))
+    env = {k: v for k, v in os.environ.items() if k not in ("GH_TOKEN", "GITHUB_TOKEN")}
     try:
-        p = subprocess.run(full, shell=True, capture_output=True, text=True, timeout=float(ctx["opts"].get("repro_timeout_s", 1800)))
+        p = subprocess.run(full, shell=True, capture_output=True, text=True, env=env, timeout=float(ctx["opts"].get("repro_timeout_s", 1800)))
         rc, out = p.returncode, p.stdout + p.stderr
     except subprocess.TimeoutExpired as e:
         rc, out = -1, f"timeout after {e.timeout} s\n" + ((e.stdout or b"").decode(errors="ignore") if isinstance(e.stdout, bytes) else (e.stdout or ""))
-    shows = rc != 0
-    return {"ok": shows == (role == "control"), "role": role, "exit": rc, "shows_problem": shows, "cmd": cmd, "output_tail": out[-2000:]}
+    outcome = "passes" if rc == 0 else ("fails" if rc == 1 else "error")
+    expected = "fails" if role == "control" else "passes"
+    return {"ok": outcome == expected, "role": role, "exit": rc, "outcome": outcome, "shows_problem": outcome == "fails", "cmd": cmd, "output_tail": out[-2000:]}
 
 
 def perf(ctx):

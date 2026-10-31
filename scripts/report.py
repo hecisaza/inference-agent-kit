@@ -15,7 +15,7 @@ import argparse, html, json, os, re, statistics
 ALL_SUITES = ("smoke", "boundary", "cutin", "perf", "soak", "fault", "repro", "bench")
 NOT_SHOWN = {"smoke": "basic answers, greedy repeat equality, streaming and JSON mode", "boundary": "reply equality at chunk ends and prefix-cache cases",
              "cutin": "a short request's first-token time behind a cold long prompt", "soak": "errors, canary mismatches and resource growth over time with client aborts",
-             "fault": "a clean pair exit and recovery after an injected read fault", "bench": "throughput and latency against a control",
+             "fault": "a clean pair exit and recovery after an injected read fault", "bench": "an external benchmark against a control (The Grill or similar)",
              "repro": "whether the issue's reproduction command shows the problem on the control and not on the candidate",
              "perf": "decode, prefill and aggregate throughput against the control"}
 HASH = re.compile(r"^[0-9a-f]{12}$")
@@ -27,12 +27,12 @@ def tick(b): return "✓" if b else "**✗**"
 
 
 def med(xs):
-    xs = [x for x in xs if isinstance(x, (int, float))]
+    xs = [x for x in (xs or []) if isinstance(x, (int, float))]
     return round(statistics.median(xs), 2) if xs else None
 
 
 def spread(xs):
-    xs = [x for x in xs if isinstance(x, (int, float))]
+    xs = [x for x in (xs or []) if isinstance(x, (int, float))]
     return f"{min(xs)}–{max(xs)}" if len(xs) > 1 else ""
 
 
@@ -160,25 +160,30 @@ def main():
                         md.append(f"| `{cell(n)}` | {cell(c['case'])} | {tick(c['request_failed'])} | {cell(c['head'])} {tick(c['exit_ok'])} | {c.get('head_exit_s', c.get('head_s'))} | {cell(c['others'])} | {tick(c['reference_equal_after_restart'])}{(' (' + cell(c['after_error']) + ')') if c.get('after_error') else ''} |")
             md.append("\nRestarts between cases were made by the test harness, not by a supervisor.")
         elif s == "repro":
-            md.append("| target | role | exit | shows the problem | expected | as expected |\n|---|---|---|---|---|---|")
+            md.append("| target | role | rep | exit | outcome | expected | as expected |\n|---|---|---|---|---|---|---|")
             got = {}
+            def outcome(r): return r.get("outcome") or ("fails" if r.get("shows_problem") else "passes")  # noqa: E306  (older results have no outcome)
             for n in names:
-                for r in R[s].get(n, []):
+                for i, r in enumerate(R[s].get(n, [])):
                     if r.get("skipped"):
-                        md.append(f"| `{cell(n)}` | skipped: {cell(r['skipped'])} | | | | |"); continue
-                    got.setdefault(n, r)
-                    md.append(f"| `{cell(n)}` | {cell(r.get('role'))} | {r.get('exit')} | {tick(r.get('shows_problem'))} | {'shows it' if r.get('role') == 'control' else 'does not show it'} | {tick(r.get('ok'))} |")
-            c, k = got.get(cand), got.get(ctrl)
-            if c and k:
-                if k["shows_problem"] and not c["shows_problem"]: md.append("\n**Reproduced on the control and gone on the candidate.**")
-                elif not k["shows_problem"]: md.append("\n**Not reproduced on the control**: the problem did not show on the base, so this run cannot say that the candidate fixes it.")
+                        md.append(f"| `{cell(n)}` | skipped: {cell(r['skipped'])} | | | | | |"); continue
+                    got.setdefault(n, []).append(r)
+                    md.append(f"| `{cell(n)}` | {cell(r.get('role'))} | {i} | {r.get('exit')} | {outcome(r)} | {'fails' if r.get('role') == 'control' else 'passes'} | {tick(r.get('ok'))} |")
+            cs, ks = got.get(cand, []), got.get(ctrl, [])
+            errs = [(n, i, r.get("exit")) for n, rs in got.items() for i, r in enumerate(rs) if outcome(r) == "error"]
+            if errs:
+                md.append("\n**Inconclusive**: the script errored (" + ", ".join(f"`{cell(n)}` rep {i} exit {e}" for n, i, e in errs) + "); an error is not a reproduction and not a pass.")
+            elif cs and ks:
+                if all(outcome(r) == "fails" for r in ks) and all(outcome(r) == "passes" for r in cs): md.append("\n**Reproduced on the control and gone on the candidate** (every repetition).")
+                elif any(outcome(r) == "passes" for r in ks): md.append("\n**Not reproduced on the control**: the problem did not show on the base in every repetition, so this run cannot say that the candidate fixes it.")
                 else: md.append("\n**Still present on the candidate.**")
-            elif c:
-                md.append("\n" + ("**The problem does not show on the candidate** (no control in this run)." if not c["shows_problem"] else "**The problem shows on the candidate.**"))
+            elif cs:
+                md.append("\n" + ("**The problem does not show on the candidate** (no control in this run)." if all(outcome(r) == "passes" for r in cs) else "**The problem shows on the candidate.**"))
             if got:
-                md.append(f"\nCommand: `{cell(next(iter(got.values())).get('cmd', ''))}`\n")
-                md.append("<details><summary>output of the reproduction command (tail)</summary>\n")
-                for n, r in got.items(): md.append(f"- `{cell(n)}`: `{cell(r.get('output_tail', '')[-600:]) or '(no output)'}`")
+                md.append(f"\nCommand: `{cell(next(iter(got.values()))[0].get('cmd', ''))}`\n")
+                md.append("<details><summary>output of the script (tail)</summary>\n")
+                for n, rs in got.items():
+                    for i, r in enumerate(rs): md.append(f"- `{cell(n)}` rep {i}: `{cell(r.get('output_tail', '')[-600:]) or '(no output)'}`")
                 md.append("\n</details>")
         elif s == "bench":
             for n in names:

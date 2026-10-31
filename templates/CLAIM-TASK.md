@@ -31,6 +31,9 @@ observe it (a fault hook, a log line, a unit test in the repository). That is a 
 - prints evidence lines as it goes, then exactly one final line: `CLAIM: holds` and exit 0, or `CLAIM: does not hold`
   and exit 1; on an API failure that prevents the check, `CLAIM: error <why>` and exit 2;
 - a header comment: which claim of `PR.md` it tests, how, and what the second opinion said would exercise the change.
+- assert the whole expected behaviour, not only the symptom: when the test sends a request and then checks a follow-up,
+  the first request's status and content must also be what the pull request promises (a build that simply rejects
+  the first request must not pass).
 - Run it against `{{LIVE_API}}` before you stop and paste the output in a comment block at the end of the file.
 
 Shape of such a script:

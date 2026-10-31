@@ -11,6 +11,7 @@ cat > claim.sh <<'SH'
 API=$1; MODEL=$2
 r=$(curl -s -m 20 "$API/chat/completions" -H 'content-type: application/json' -d "{\"model\":\"$MODEL\",\"messages\":[{\"role\":\"user\",\"content\":\"What is 17*23? Reply with the number only.\"}],\"max_tokens\":8}")
 echo "reply: ${r:0:200}"
+[ -n "$r" ] || { echo "CLAIM: error no reply from the API"; exit 2; }
 if grep -q 391 <<<"$r"; then echo "CLAIM: holds"; exit 0; else echo "CLAIM: does not hold"; exit 1; fi
 SH
 echo "fake claim agent done"

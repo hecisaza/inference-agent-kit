@@ -29,8 +29,8 @@ def review_verdict(path):
     if not path or not os.path.isfile(path):
         return None
     text = open(path, errors="ignore").read().upper()
-    found = [v for v in REVIEW_VERDICTS if v in text]
-    return found[0] if found else "no verdict line"
+    pos = {v: text.rfind(v) for v in REVIEW_VERDICTS if v in text}
+    return max(pos, key=pos.get) if pos else "no verdict line"
 
 
 def series(R, suite, target, pick):
@@ -69,6 +69,7 @@ def collisions(path, pr):
 def main():
     ap = argparse.ArgumentParser(usage=__doc__)
     ap.add_argument("run"); ap.add_argument("--review"); ap.add_argument("--sync"); ap.add_argument("--pr"); ap.add_argument("--label-prefix", default="evidence:")
+    ap.add_argument("--pr-file", help="the PR's title and description; a measured speed-up counts as the claim only when the PR claims performance")
     a = ap.parse_args(); run = a.run.rstrip("/")
     R = json.load(open(os.path.join(run, "results.json"))); meta = R.pop("meta", {}) or {}
     cand, ctrl = meta.get("candidate"), meta.get("control")
@@ -80,37 +81,55 @@ def main():
 
     cand_fail = failed(cand, skip=("repro",)) if cand else []
     ctrl_fail = failed(ctrl, skip=("repro",)) if ctrl else []
+    # the matrix must be complete: every requested suite, on every target, for every repetition; an absent result is not a pass
+    reps_n = int(meta.get("opts", {}).get("reps", 1) or 1)
+    incomplete = []
+    for s_ in meta.get("suites", []) or suites:
+        for t_ in [x for x in (cand, ctrl) if x]:
+            n = len(R.get(s_, {}).get(t_, []))
+            if n < reps_n:
+                incomplete.append(f"{s_} on {t_}: {n} of {reps_n} repetition(s)")
     marks = " · ".join(f"{s} {'✗' if s in cand_fail else '✓'}" for s in suites if s != "repro") or "(no suites)"
     facts.append(f"suites on `{cand}`: {marks}")
 
-    same = total = 0
+    same = total = 0; prompt_sets_differ = False
     if "boundary" in R and cand in R["boundary"] and ctrl in R["boundary"]:
         for ra, rb in zip(R["boundary"][cand], R["boundary"][ctrl]):
-            for x, y in zip(ra.get("hashes", []), rb.get("hashes", [])):
+            ha, hb = ra.get("hashes", []), rb.get("hashes", [])
+            if [x[0] for x in ha] != [x[0] for x in hb]:
+                prompt_sets_differ = True; continue
+            for x, y in zip(ha, hb):
                 total += 1; same += bool(HASH.match(str(x[2]))) and x[2] == y[2]
-        facts.append(f"replies: {same}/{total} identical to the control")
+        facts.append(f"replies: {same}/{total} identical to the control" + (" (a repetition compared different prompt sets and was discarded)" if prompt_sets_differ else ""))
+        if total == 0 and not prompt_sets_differ:
+            incomplete.append("boundary: no reply comparison was made")
     identical = total == 0 or same == total
 
     repro = None
     kind = "claim" if "claim.sh" in str(meta.get("opts", {}).get("repro_cmd", "")) else "repro"
     if "repro" in R and cand in R["repro"]:
-        c = R["repro"][cand][0]; k = (R["repro"].get(ctrl) or [None])[0]
-        if c.get("skipped"):
+        def outcome(r): return r.get("outcome") or ("fails" if r.get("shows_problem") else "passes")  # noqa: E306  (older results carry no outcome)
+        cs = [r for r in R["repro"][cand] if not r.get("skipped")]; ks = [r for r in R["repro"].get(ctrl, []) if not r.get("skipped")]
+        co, ko = [outcome(r) for r in cs], [outcome(r) for r in ks]
+        if not cs:
             repro = None
-        elif c.get("shows_problem") and kind == "claim" and (k is None or k.get("shows_problem")):
+        elif "error" in co or "error" in ko:
+            repro = "inconclusive"   # the script could not judge on some repetition: not a reproduction, not a pass
+        elif all(o == "passes" for o in co):
+            repro = "confirmed" if (not ks or all(o == "fails" for o in ko)) else "not reproduced on the base"
+        elif any(o == "passes" for o in ko):
+            repro = "regression"   # the candidate fails where the base passes
+        elif kind == "claim":
             repro = "inconclusive"   # a claim test that fails on both builds observes nothing
-        elif c.get("shows_problem"):
-            repro = "still present"
-        elif k is not None and not k.get("shows_problem"):
-            repro = "not reproduced on the base"
         else:
-            repro = "confirmed"
-        facts.append(f"{kind} script: {repro}" if repro else f"{kind} script: skipped")
+            repro = "still present"
+        facts.append(f"{kind} script: {repro}" + (f" ({len(cs)} repetition(s))" if repro else "") if repro else f"{kind} script: skipped")
 
     perf = performance(R, cand, ctrl) if cand and ctrl else []
     slow = [x for x in perf if x["call"] == "slower"]; fast = [x for x in perf if x["call"] == "faster"]
     if perf:
         facts.append("performance against the control (each with its own noise band): " + " · ".join(f"{x['metric']} {x['delta']:+.0%} (±{x['noise']:.0%}{', ' + x['call'] if x['call'] != 'same' else ''})" for x in perf))
+    perf_claim = bool(a.pr_file and os.path.isfile(a.pr_file) and re.search(r"faster|slower|throughput|latenc|tok/s|tokens/s|speed|perf", open(a.pr_file, errors="ignore").read(), re.I))
     rv = review_verdict(a.review)
     facts.append(f"second opinion: {rv or 'none'}")
     col = collisions(a.sync, a.pr)
@@ -118,39 +137,50 @@ def main():
     restore = meta.get("restore") or "not recorded"
     facts.append(f"restore: {restore}")
 
+    blockers = []
+    if cand_fail:
+        blockers.append(f"{', '.join(cand_fail)} failed on the candidate")
+    if repro == "still present":
+        blockers.append("the reproduction script still shows the problem on the candidate")
+    if repro == "regression":
+        blockers.append(f"the {kind} script passes on the base and fails on the candidate")
+    if col:
+        blockers.append("a patch number collides with another open pull request")
+    if slow:
+        blockers.append("slower than the control: " + ", ".join(f"{x['metric']} {x['delta']:+.0%} (noise ±{x['noise']:.0%})" for x in slow))
+    if rv == "EVIDENCE CONTRADICTS THE CLAIM":
+        blockers.append("the second opinion contradicts the claim")
+    if not identical and rv != "EVIDENCE SUPPORTS THE CLAIM":
+        blockers.append(f"{total - same} of {total} replies differ from the control and the second opinion does not confirm that as the claim")
     if str(restore).startswith("RESTORE FAILED"):
         reasons.append("the restore of the live configuration failed")
     if ctrl_fail:
         reasons.append(f"the control failed {', '.join(ctrl_fail)}: the base or the lab was not healthy")
+    if incomplete:
+        reasons.append("incomplete run: " + "; ".join(incomplete))
+    if prompt_sets_differ and total == 0:
+        reasons.append("the boundary suite compared different prompt sets on the two targets")
     if rv == "EVIDENCE UNRELIABLE":
         reasons.append("the second opinion finds the evidence unreliable")
     if reasons:
         cls = "RERUN"
+        if blockers:
+            reasons.append("also observed: " + "; ".join(blockers))
     else:
-        if cand_fail:
-            reasons.append(f"{', '.join(cand_fail)} failed on the candidate")
-        if repro == "still present":
-            reasons.append("the claim or reproduction script does not pass on the candidate (the problem still shows, or the claim does not hold)")
-        if col:
-            reasons.append("a patch number collides with another open pull request")
-        if slow:
-            reasons.append("slower than the control: " + ", ".join(f"{x['metric']} {x['delta']:+.0%} (noise ±{x['noise']:.0%})" for x in slow))
-        if rv == "EVIDENCE CONTRADICTS THE CLAIM":
-            reasons.append("the second opinion contradicts the claim")
-        if not identical and rv != "EVIDENCE SUPPORTS THE CLAIM":
-            reasons.append(f"{total - same} of {total} replies differ from the control and the second opinion does not confirm that as the claim")
+        reasons = blockers
         if reasons:
             cls = "NOT READY"
-        elif repro == "confirmed" or rv == "EVIDENCE SUPPORTS THE CLAIM" or fast:
+        elif repro == "confirmed" or rv == "EVIDENCE SUPPORTS THE CLAIM" or (fast and perf_claim):
             cls = "READY"
             reasons.append("every suite green, no slowdown" + (", the claim or reproduction script fails on the base and passes on the candidate" if repro == "confirmed" else "")
                            + (", the second opinion supports the claim" if rv == "EVIDENCE SUPPORTS THE CLAIM" else "")
-                           + ((", faster than the control: " + ", ".join(f"{x['metric']} {x['delta']:+.0%}" for x in fast)) if fast else ""))
+                           + ((", faster than the control as the PR claims: " + ", ".join(f"{x['metric']} {x['delta']:+.0%}" for x in fast)) if fast and perf_claim else ""))
         else:
             cls = "SAFE, UNVERIFIED"
-            reasons.append("no regression, no slowdown; " + ("the claim test fails on both builds: it does not observe the change (not evidence against the pull request)" if repro == "inconclusive"
+            reasons.append("no regression, no slowdown; " + ((f"the {kind} script errored on a build: inconclusive" if ("error" in (co + ko) if "repro" in R and cand in R["repro"] else False) else "the claim test fails on both builds: it does not observe the change (not evidence against the pull request)") if repro == "inconclusive"
                            else "the claim or reproduction script passes on the base too, so it does not isolate the change" if repro == "not reproduced on the base"
-                           else "the changed path was not exercised by any suite" + (" (second opinion: claim not tested)" if rv and "NOT TESTED" in rv else "")))
+                           else "the changed path was not exercised by any suite" + (" (second opinion: claim not tested)" if rv and "NOT TESTED" in rv else ""))
+                           + ((" — faster than the control (" + ", ".join(f"{x['metric']} {x['delta']:+.0%}" for x in fast) + "), noted but not counted: the PR does not claim performance") if fast and not perf_claim else ""))
     label = a.label_prefix + LABEL[cls]
     head = f"**Merge readiness: {cls}** — {'; '.join(reasons)}."
     md = [head, ""] + [f"- {f}" for f in facts] + ["", "_A person merges. READY: the evidence supports the claim. SAFE, UNVERIFIED: nothing broke, but the change itself was not exercised. NOT READY: something failed or is unexplained. RERUN: the measurement is not trustworthy._"]

@@ -53,11 +53,14 @@ SAFE, UNVERIFIED means no suite exercised what the pull request changes. The sec
 would. On the first attempt of a run that ends there, the `verify` job hands the diff, the description, the second
 opinion and the report to an agent (`scripts/claim-agent.sh`, task `templates/CLAIM-TASK.md`, no token) that writes
 `claim.sh API MODEL`: evidence lines, then `CLAIM: holds` (exit 0) or `CLAIM: does not hold` (exit 1). The script is
-run against the live build, which is the base: it must say the claim does not hold there, or it does not isolate the
-change; the agent gets one correction round. An accepted claim is committed under `claims/<owner>-<repo>-pr-<n>.sh`
+run against the live build, which normally serves the current main and so stands in for the base (a lab whose live
+build is older than the PR's base weakens this check; the rerun against the real base is what counts): it must say the
+claim does not hold there, or it does not isolate the change; the agent gets one correction round. An accepted claim is committed under `claims/<owner>-<repo>-pr-<n>.sh`
 on the fork's main and the pipeline is dispatched again for the same PR (`attempt=2`, the cap). That run picks the
-claim up as the repro suite: fails on the base and passes on the PR → READY; fails on the PR → NOT READY with the
-output; passes on both → stays UNVERIFIED and says the test does not isolate the change. The claims accumulate on the
+claim up as the repro suite: fails on the base and passes on the PR → READY; passes on both → stays UNVERIFIED, the
+test does not isolate the change; fails on both → inconclusive, the test observes nothing (UNVERIFIED, never a mark
+against the PR); passes on the base and fails on the PR → NOT READY; a script that errors (exit other than 0 or 1,
+or a timeout) on either side → inconclusive. The claims accumulate on the
 fork as a library a PR author can be handed. A NOT READY on someone else's PR is theirs to fix; the pipeline reports.
 
 ## What a run produces
@@ -98,7 +101,7 @@ fork as a library a PR author can be handed. A NOT READY on someone else's PR is
 
 ```
 scripts/pairtest build --lab lab.run.yaml --target base && scripts/pairtest build --lab lab.run.yaml --target pr
-scripts/pairtest run --lab lab.run.yaml --target pr --compare base --suite smoke,boundary,cutin,soak --opt reps=2 \
+scripts/pairtest run --lab lab.run.yaml --target pr --compare base --suite smoke,boundary,cutin,perf,soak,repro --opt reps=2 \
     --opt "repro_cmd=bash tests/repro-issue-12.sh {api} {model}"      # the repro suite, when the PR fixes an issue
 scripts/evidence-review.sh runs/<run> --checkout . --base <base sha> --head <head sha> --pr-url <url>   # the second opinion
 LIVE_API=http://head:8888/v1 LIVE_MODEL=<model> scripts/issue-agent.sh https://github.com/<owner>/<repo>/issues/12 --repo <fork>

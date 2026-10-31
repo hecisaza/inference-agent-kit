@@ -48,7 +48,7 @@ declined() {  # the agent may decline: NO-CLAIM.md, first line "NO-CLAIM: <why t
 check_on_base() {  # the script must say the claim does not hold on the base, and exit 1
   [ -s "$w/claim.sh" ] || { verdict="no claim.sh written"; return 1; }
   bash -n "$w/claim.sh" 2>"$w/syntax.txt" || { verdict="claim.sh does not parse: $(head -1 "$w/syntax.txt")"; return 1; }
-  ( cd "$w" && timeout 900 bash claim.sh "$LIVE_API" "$LIVE_MODEL" ) > "$w/base-run.txt" 2>&1; local rc=$?
+  ( cd "$w" && env -u GH_TOKEN -u GITHUB_TOKEN timeout 900 bash claim.sh "$LIVE_API" "$LIVE_MODEL" ) > "$w/base-run.txt" 2>&1; local rc=$?   # no publishing credentials for a generated script
   local line; line=$(grep -E "^CLAIM: " "$w/base-run.txt" | tail -1)
   if [ "$rc" = 1 ] && [ "$line" = "CLAIM: does not hold" ]; then verdict="ok"; return 0; fi
   if [ "$rc" = 0 ] && [ "$line" = "CLAIM: holds" ]; then verdict="the claim already holds on the base (exit 0): the test does not isolate the change"; return 1; fi

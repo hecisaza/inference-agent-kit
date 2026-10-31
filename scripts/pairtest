@@ -203,7 +203,7 @@ class Command:
     def stop(self, t, log):
         if not t.get("stop"):
             raise RuntimeError(f"target on {t['host']} has no stop: command; pairtest cannot hand over to another target without it")
-        log(f"stop on {t['host']}: {t['stop']}"); self.lab.sh(t["host"], t["stop"]); time.sleep(int(t.get("stop_wait_s", 3)))
+        log(f"stop on {t['host']}: {t['stop']}"); self.lab.sh(t["host"], t["stop"], check=True); time.sleep(int(t.get("stop_wait_s", 3)))
 
     def artifact_id(self, host, t):
         if not t.get("artifact"):
@@ -243,7 +243,7 @@ class Service:
         log(f"start service {t['service']['name']} on {t['host']}"); self.lab.sh(t["host"], self.cmds(t)[0], check=True)
 
     def stop(self, t, log):
-        log(f"stop service {t['service']['name']} on {t['host']}"); self.lab.sh(t["host"], self.cmds(t)[1])
+        log(f"stop service {t['service']['name']} on {t['host']}"); self.lab.sh(t["host"], self.cmds(t)[1], check=True)
 
     def artifact_id(self, host, t): return ""
     def ident(self, t): return {"backend": "service", "host": t["host"], "service": t["service"], "env_file": t.get("env_file"), "env": t.get("env", {})}
@@ -291,17 +291,24 @@ def live_is_up(lab):
     if not api_up(live["api"], live.get("model")):
         return False
     m = marked(lab, live)
-    return m.get("hash") == config_hash(lab, live) if m else backend(lab, live).looks_live(live)
+    if m and m.get("hash") != config_hash(lab, live):
+        return False
+    return bool(backend(lab, live).looks_live(live))   # the running artifact is live's, not only the marker
 
 
 class Switcher:
-    """Starts targets one at a time: the one that runs is stopped before the next starts, so no two coexist."""
+    """Starts targets one at a time: what runs (the live configuration at first) is stopped before the next starts, so
+    no two coexist; a target whose configuration is what already runs is kept, not restarted."""
 
     def __init__(self, lab, log):
-        self.lab, self.log, self.current = lab, log, None
+        self.lab, self.log = lab, log
+        self.current = ("live", lab.c["live"]) if lab.c.get("live") else None
 
     def to(self, name, t):
-        if self.current and self.current[0] != name:
+        if self.current and config_hash(self.lab, self.current[1]) == config_hash(self.lab, t):
+            self.log(f"{name}: the running configuration ({self.current[0]}) is the same; kept")
+            mark(self.lab, t, name); self.current = (name, t); return
+        if self.current:
             backend(self.lab, self.current[1]).stop(self.current[1], self.log)
         backend(self.lab, t).start(t, self.log)
         mark(self.lab, t, name)
@@ -388,9 +395,9 @@ def cmd_run(lab, a):
         if not a.no_restore:
             try:
                 live = lab.c["live"]
-                if sw.current and config_hash(lab, sw.current[1]) == config_hash(lab, live):
-                    log(f"restore: the last target ({sw.current[0]}) is the live configuration; it stays up")
-                    meta["restore"] = f"live kept running (the last target, {sw.current[0]}, is the live configuration)"
+                if sw.current and config_hash(lab, sw.current[1]) == config_hash(lab, live) and (lab.dry or live_is_up(lab)):
+                    log(f"restore: the last target ({sw.current[0]}) is the live configuration and answers; it stays up")
+                    meta["restore"] = f"live kept running (the last target, {sw.current[0]}, is the live configuration; verified up)"
                 else:
                     log("restore: stop the last target, start live")
                     if sw.current:
@@ -398,7 +405,9 @@ def cmd_run(lab, a):
                     backend(lab, live).start(live, log); mark(lab, live, "live")
                     if not lab.dry:
                         log(f"live ready after {ready(live['api'])} s")
-                    meta["restore"] = "live restored"
+                        if not live_is_up(lab):
+                            raise RuntimeError("live answered but what runs is not the live configuration")
+                    meta["restore"] = "live restored (verified: API answers, running artifact is live's)"
             except Exception as e:  # noqa: BLE001
                 meta["restore"] = f"RESTORE FAILED: {e!r}"[:300]; log(meta["restore"]); failed.append("restore")
         json.dump(results, open(os.path.join(run, "results.json"), "w"), indent=1)
@@ -418,7 +427,7 @@ def cmd_restore(lab, a):
     if not lab.dry and live_is_up(lab):
         log(f"live is up ({live.get('model')} answers at {live['api']} and nothing else was started since): nothing to do"); return
     for name, t in lab.c["targets"].items():
-        if t.get("backend", "recipe-docker") != "recipe-docker" and t.get("stop"):
+        if t.get("backend", "recipe-docker") != "recipe-docker":
             try:
                 backend(lab, t).stop(t, log)
             except Exception as e:  # noqa: BLE001
@@ -426,6 +435,8 @@ def cmd_restore(lab, a):
     backend(lab, live).start(live, log); mark(lab, live, "live")
     if not lab.dry:
         log(f"live ready after {ready(live['api'])} s")
+        if not live_is_up(lab):
+            sys.exit("live answered but what runs is not the live configuration")
 
 
 def main():
