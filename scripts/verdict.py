@@ -107,8 +107,7 @@ def main():
     perf = performance(R, cand, ctrl) if cand and ctrl else []
     slow = [x for x in perf if x["call"] == "slower"]; fast = [x for x in perf if x["call"] == "faster"]
     if perf:
-        facts.append("performance against the control: " + " · ".join(f"{x['metric']} {x['delta']:+.0%}" + (f" ({x['call']})" if x["call"] != "same" else "") for x in perf)
-                     + f" (noise ±{max(x['noise'] for x in perf):.0%})")
+        facts.append("performance against the control (each with its own noise band): " + " · ".join(f"{x['metric']} {x['delta']:+.0%} (±{x['noise']:.0%}{', ' + x['call'] if x['call'] != 'same' else ''})" for x in perf))
     rv = review_verdict(a.review)
     facts.append(f"second opinion: {rv or 'none'}")
     col = collisions(a.sync, a.pr)
