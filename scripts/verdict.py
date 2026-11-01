@@ -253,10 +253,17 @@ def main():
         rerun.append(f"the {kind} script errored on a build (exit other than 0 or 1): it judged nothing")
     if slow and reps_n < 2:
         rerun.append("a slowdown in a single repetition is timing uncertainty, not a defect: rerun counterbalanced (reps=2): " + ", ".join(f"{x['metric']} {x['delta']:+.0%} (band ±{x['band']:.0%})" for x in slow))
-    if rv == "EVIDENCE UNRELIABLE":
+    measurement_green = not cand_fail and not ctrl_fail and not incomplete and not str(restore).startswith("RESTORE FAILED") and not prompt_sets_differ
+    if rv == "EVIDENCE UNRELIABLE" and not (measurement_green and claim_audit == "UNSOUND"):
         rerun.append("the second opinion finds the evidence unreliable")
+    elif rv == "EVIDENCE UNRELIABLE":
+        not_verified_extra = "the second opinion finds the claim verification unreliable (claim test unsound) while the regression evidence is complete and green"
 
     # ---- the class
+    try:
+        not_verified_extra
+    except NameError:
+        not_verified_extra = ""
     verified = []
     if repro == "confirmed" and claim_audit == "SOUND":
         verified.append(f"the {kind} script fails on the base and passes on the candidate, and the second opinion found its oracle sound")
@@ -277,6 +284,10 @@ def main():
         not_verified.append("the claim test fails on both builds: it observes nothing (not evidence against the pull request)")
     if repro == "not reproduced on the base":
         not_verified.append(f"the {kind} script passes on the base too, so it does not isolate the change")
+    if not_verified_extra:
+        not_verified.append(not_verified_extra)
+    if not integrated and cand_kind != "unknown":
+        not_verified.append("the pull request does not merge cleanly onto its current base: tested as the head on its merge-base; a rebase is needed before current readiness can be judged")
 
     if rerun:
         cls = "RERUN"; reasons = rerun + (["also observed: " + "; ".join(blockers)] if blockers else [])

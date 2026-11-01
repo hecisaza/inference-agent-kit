@@ -40,5 +40,9 @@ and where it falls short. Do not trust the report: recompute.
    `AUTHOR TESTS: UNSOUND`, `AUTHOR TESTS: NOT INSPECTED` (when you could not read them), or `AUTHOR TESTS: NONE`,
    with one sentence why. The verdict reads these lines literally: an inspected, sound oracle is what turns a passing
    test into verification.
-6. **Verdict, one line**, one of: `EVIDENCE SUPPORTS THE CLAIM` / `NO REGRESSION SHOWN, CLAIM NOT TESTED` /
-   `EVIDENCE CONTRADICTS THE CLAIM` / `EVIDENCE UNRELIABLE`, followed by the two or three facts that decide it.
+6. **Verdict, one line**, one of: `EVIDENCE SUPPORTS THE CLAIM` (the run verifies the stated claim with a sound oracle)
+   / `NO REGRESSION SHOWN, CLAIM NOT TESTED` (the regression evidence is valid; the claim is not verified — including
+   when the only claim test is unsound) / `EVIDENCE CONTRADICTS THE CLAIM` / `EVIDENCE UNRELIABLE` (the *measurement*
+   itself cannot be trusted: an unhealthy control, an incomplete or inconsistent matrix, a restore problem, mismatched
+   prompt sets — not merely an unsound claim test, which belongs to the previous line), followed by the two or three
+   facts that decide it.

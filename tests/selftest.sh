@@ -172,6 +172,11 @@ json.dump({"bands": {"decode": 0.02}, "provisional": True, "expires": "2000-01-0
 PY
 python3 scripts/verdict.py "$pv/cal" --noise lab.noise.example.json > "$pv/o8" 2>&1 && grep -q "NOT READY.*decode -2%" "$pv/o8" && grep -q "provisional calibration" "$pv/cal/VERDICT.md" && ok "verdict.py: a 2.5 % decode loss over two repetitions blocks under the calibrated ±2 % band" || bad "verdict calibrated: $(cat "$pv/o8")"
 python3 scripts/verdict.py "$pv/cal" --noise "$pv/expired.json" > "$pv/o9" 2>&1 && ! grep -q "NOT READY" "$pv/o9" && grep -q "calibration expired" "$pv/cal/VERDICT.md" && ok "verdict.py: an expired calibration falls back to the floors and says so" || bad "verdict expired calibration: $(cat "$pv/o9")"
+# an "unreliable" second opinion that is really about an unsound claim test, with green regression evidence, is SAFE not RERUN
+printf 'NO REGRESSION SHOWN, CLAIM NOT TESTED\nCLAIM TEST: UNSOUND — accepts any first response.\nEVIDENCE UNRELIABLE — for full-claim verification: the oracle permits rejection-only implementations.\n' > "$pv/REVIEW-unrel.md"
+python3 scripts/verdict.py "$good" --review "$pv/REVIEW-unrel.md" > "$pv/o13" 2>&1 && grep -q "SAFE, UNVERIFIED.*claim verification unreliable (claim test unsound)" "$pv/o13" && ! grep -q "RERUN" "$pv/o13" && ok "verdict.py: 'unreliable' aimed at an unsound claim test with green regression evidence -> SAFE, not RERUN" || bad "verdict unreliable-claim: $(cat "$pv/o13")"
+printf 'EVIDENCE UNRELIABLE — the control failed and the matrix is inconsistent.\n' > "$pv/REVIEW-unrel2.md"
+python3 scripts/verdict.py "$good" --review "$pv/REVIEW-unrel2.md" > "$pv/o14" 2>&1 && grep -q "RERUN.*finds the evidence unreliable" "$pv/o14" && ok "verdict.py: 'unreliable' about the measurement -> RERUN" || bad "verdict unreliable-measurement: $(cat "$pv/o14")"
 # absolute latency floor: a 17 % cut-in difference that is 0.06 s is noise at any ratio
 python3 - "$pv" "$full_run" <<'PY'
 import json, os, sys
