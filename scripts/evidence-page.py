@@ -40,10 +40,25 @@ tr:last-child td{border-bottom:none} td.num{font-variant-numeric:tabular-nums} t
 a{color:var(--accent);text-decoration:none} a:hover{text-decoration:underline} .small{font-size:13px;color:var(--muted)} .foot{color:var(--muted);font-size:13px;margin-top:36px;border-top:1px solid var(--line);padding-top:12px}"""
 
 
+def current_rule(vj, facts, cls):
+    """The class a run's recorded facts give under the current verdict rule (audited oracles), when the run was judged
+    under an earlier rule: READY survives only with an inspected oracle or a supported, claimed speed-up."""
+    if "verified" in vj:
+        return cls, ""
+    if cls != "READY":
+        return cls, ""
+    f = " ".join(facts)
+    if "claim script: confirmed" in f or "repro script: confirmed" in f:
+        return "SAFE, UNVERIFIED", "claim script fails on the base and passes on the PR, oracle not yet inspected by the second opinion"
+    if "the PR's own tests: confirmed" in f:
+        return "SAFE, UNVERIFIED", "tested by the author (its tests fail on the base, pass on the PR); oracle not independently inspected"
+    return "SAFE, UNVERIFIED", "READY under the earlier rule rested on a supporting second opinion or a measured speed-up without an audited test"
+
+
 def badge(cls, historical):
     key = {"READY": "ready", "SAFE, UNVERIFIED": "safe", "NOT READY": "block", "RERUN": "info"}.get(cls, "info")
     b = f'<span class="badge {key}">{esc(cls)}</span>'
-    return (f'<span class="badge hist">HISTORICAL</span> ' + b) if historical else b
+    return ('<span class="badge hist">HISTORICAL</span> ' + b) if historical else b
 
 
 def main():
@@ -96,33 +111,35 @@ def main():
         except subprocess.CalledProcessError:
             pass
         pr_states[state_now.split()[0]] = pr_states.get(state_now.split()[0], 0) + 1
-        hist = bool(vj.get("historical")) or ((man.get("pr_state") or "open") in ("closed", "merged"))
+        hist = bool(vj.get("historical")) or ((man.get("pr_state") or "open") in ("closed", "merged")) or state_now.startswith(("closed", "merged"))
+        cur, cur_why = current_rule(vj, facts, cls)
         links = " · ".join(f'<a href="https://github.com/{a.repo}/tree/{tip}/docs/evidence/{r}">{esc(r)}</a>' for r in runs)
-        rows.append({"pr": pr, "url": url, "title": title, "state_now": state_now, "cls": cls, "hist": hist, "perf": perf, "verified": verified, "replies": replies,
+        rows.append({"pr": pr, "url": url, "title": title, "state_now": state_now, "cls": cls, "cur": cur, "cur_why": cur_why, "hist": hist, "perf": perf, "verified": verified, "replies": replies,
                      "exec_state": man.get("pr_state") or "unknown", "kind": man.get("candidate_kind") or "unknown", "switches": man.get("switches") or "unknown",
                      "head": str(man.get("head_sha", ""))[:8], "base": str(man.get("base_sha", ""))[:8], "latest": latest, "links": links, "n": len(runs)})
     order = {"NOT READY": 0, "READY": 1, "SAFE, UNVERIFIED": 2, "RERUN": 3}
-    rows.sort(key=lambda r: (r["hist"], order.get(r["cls"], 9), -r["pr"]))
+    rows.sort(key=lambda r: (r["hist"], order.get(r["cur"], 9), -r["pr"]))
     counts = {}
     for r in rows:
-        k = ("historical" if r["hist"] else r["cls"]); counts[k] = counts.get(k, 0) + 1
+        k = ("historical" if r["hist"] else r["cur"]); counts[k] = counts.get(k, 0) + 1
     now = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
     out = [f"<title>{esc(a.title)}</title>", f"<style>{CSS}</style>", '<div class="wrap">', f"<h1>{esc(a.title)}</h1>",
            f'<p class="sub">{esc(a.intro)} Generated {now} from the evidence branches of <a href="https://github.com/{a.repo}">{esc(a.repo)}</a>: every number below is read from the linked run, and every link is pinned to the commit that holds it.</p>',
            '<div class="facts">', f'<div class="fact"><b>{len(rows)}</b><span>pull requests with evidence</span></div>', f'<div class="fact"><b>{runs_total}</b><span>runs on the ring</span></div>']
     for k in ("READY", "SAFE, UNVERIFIED", "NOT READY", "RERUN", "historical"):
         if counts.get(k):
-            out.append(f'<div class="fact"><b>{counts[k]}</b><span>{esc(k)}{" (current)" if k != "historical" else " (PR closed or merged at execution)"}</span></div>')
+            out.append('<div class="fact"><b>' + str(counts[k]) + '</b><span>' + esc(k) + (" (current)" if k != "historical" else " (PR closed or merged)") + '</span></div>')
     out.append("</div>")
-    out.append('<h2>Results</h2><div class="scroll"><table><thead><tr><th>PR</th><th>Title · state now</th><th>Latest run</th><th>Replies</th><th>Performance vs base</th><th>What verified it</th><th>Verdict</th><th>Runs</th></tr></thead><tbody>')
+    out.append('<h2>Results</h2><div class="scroll"><table><thead><tr><th>PR</th><th>Title · state now</th><th>Latest run</th><th>Replies</th><th>Performance vs base</th><th>What the run showed</th><th>Verdict under the current rule</th><th>Runs</th></tr></thead><tbody>')
     for r in rows:
         out.append(f'<tr><td class="pr"><a href="{esc(r["url"])}">#{r["pr"]}</a></td><td>{esc(r["title"])}<div class="small">{esc(r["state_now"])}</div></td>'
                    f'<td class="small">{esc(r["latest"])}<br>PR {esc(r["exec_state"])} at execution; {esc(r["kind"])}; switches: {esc(r["switches"])}<br>head {esc(r["head"])} · base {esc(r["base"])}</td>'
                    f'<td class="num small">{esc(r["replies"].replace("replies: ", ""))}</td><td class="num small">{esc(r["perf"].split(": ", 1)[-1])}</td><td class="small">{esc(r["verified"]) or "—"}</td>'
-                   f'<td>{badge(r["cls"], r["hist"])}</td><td class="small">{r["links"]}</td></tr>')
+                   f'<td>{badge(r["cur"], r["hist"])}' + (f'<div class="small">at the time: {esc(r["cls"])} — {esc(r["cur_why"])}</div>' if r["cur"] != r["cls"] else "") + f'</td><td class="small">{r["links"]}</td></tr>')
     out.append("</tbody></table></div>")
+    out.append('<p class="small">Runs judged before the current rule (Nov 1, 2026) show the class the same facts give under it, with the class recorded at the time underneath. A run of a pull request that was closed or merged at execution, or is closed now, is marked HISTORICAL.</p>')
     out.append('<h2>How to read the verdicts</h2><p><span class="badge ready">READY</span> every regression check passed, no slowdown beyond the calibrated band, and audited evidence verifies the claim (a claim or reproduction script, or the PR\'s own tests, that fail on the base and pass on the PR and that the second opinion inspected and found sound; or a claimed speed-up measured beyond the band that it supports). <span class="badge safe">SAFE, UNVERIFIED</span> nothing regressed, nothing slowed down, the claim is not verified to that standard. <span class="badge block">NOT READY</span> a failed suite, unexplained reply differences, a slowdown confirmed over repetitions, a failing claim test, a patch-number collision, or a contradicting second opinion. <span class="badge info">RERUN</span> the measurement is not trustworthy (incomplete matrix, control failure, a script error, a single-repetition slowdown). <span class="badge hist">HISTORICAL</span> the PR was closed or merged when the run executed: a record, not current readiness.</p>')
-    out.append(f'<div class="foot">Method and tooling: <a href="https://github.com/hecisaza/inference-agent-kit">inference-agent-kit</a>. A run folder holds the report, the raw results.json, the executed script, the PR\'s own tests\' raw output, the second opinion, the verdict and the run manifest. Nothing on this page was posted to the upstream repository.</div></div>')
+    out.append('<div class="foot">Method and tooling: <a href="https://github.com/hecisaza/inference-agent-kit">inference-agent-kit</a>. A run folder holds the report, the raw results.json, the executed script, the PR\'s own tests\' raw output, the second opinion, the verdict and the run manifest. Nothing on this page was posted to the upstream repository.</div></div>')
     open(a.out, "w").write("\n".join(out) + "\n")
     print(f"wrote {a.out}: {len(rows)} PRs, {runs_total} runs, counts {counts}")
 
