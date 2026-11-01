@@ -4,3 +4,5 @@ runs/
 bundles/
 __pycache__/
 *.pyc
+lab.*.json
+!lab.*.example.json

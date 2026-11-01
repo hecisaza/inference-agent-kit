@@ -59,7 +59,10 @@ def boundary(ctx):
 
 
 def cutin(ctx):
-    """A cold long prompt, then a short chat 3 s later: first-token time of each (rounds from opts, default 3)."""
+    """A cold long prompt, then a short chat 3 s later: first-token time of each (rounds from opts, default 3), and whether
+    the short request was admitted during the long prefill (its first token before the long prompt's). Admission only
+    happens with the engine's yield switch on: with it off the short request waits for the whole prompt on any build,
+    and the column measures prefill time, not admission."""
     api, model = ctx["api"], ctx["model"]; n_words = int(ctx["opts"].get("cutin_words", 64000)); res = []; errs = []
     for k in range(int(ctx["opts"].get("rounds", 3))):
         out = {}
@@ -69,7 +72,10 @@ def cutin(ctx):
         t = threading.Thread(target=long); t.start(); time.sleep(3)
         r = chat(api, model, [{"role": "user", "content": "What is 17 times 23? Number only."}], max_tokens=8, stream=True)
         out["short"] = r.get("ttft"); r.get("error") and errs.append(f"round {k} short: {r['error']}")
-        t.join(); res.append(out); ctx["log"](f"cutin round {k}: {out}")
+        t.join()
+        # admitted: the short request's first token came before the long prompt's first token, i.e. during its prefill
+        out["admitted"] = bool(out.get("short") is not None and out.get("long") is not None and out["short"] < out["long"] - 1.0)
+        res.append(out); ctx["log"](f"cutin round {k}: {out}")
     return {"ok": not errs and all(x.get("short") is not None and x.get("long") is not None for x in res), "rounds": res, "errors": errs}
 
 

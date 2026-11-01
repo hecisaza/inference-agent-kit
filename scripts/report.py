@@ -118,7 +118,9 @@ def main():
                 for i, r in enumerate(R[s].get(n, [])):
                     rd = r.get("rounds", []); sh = med([x.get("short") for x in rd]); lg = med([x.get("long") for x in rd])
                     bars += [(f"{n} rep {i} · short question", sh, n == cand), (f"{n} rep {i} · long prompt", lg, False)]
-                    md.append(f"`{cell(n)}` rep {i}: short question first token **{sh} s** (rounds {spread([x.get('short') for x in rd])}), long prompt first token {lg} s (rounds {spread([x.get('long') for x in rd])}); {len(rd)} rounds" + (f"; errors: {cell(r['errors'])}" if r.get("errors") else ""))
+                    adm = [x.get("admitted") for x in rd if "admitted" in x]
+                    md.append(f"`{cell(n)}` rep {i}: short question first token **{sh} s** (rounds {spread([x.get('short') for x in rd])}), long prompt first token {lg} s (rounds {spread([x.get('long') for x in rd])}); {len(rd)} rounds"
+                              + (f"; admitted during the long prefill in {sum(1 for a_ in adm if a_)} of {len(adm)} rounds" if adm else "") + (f"; errors: {cell(r['errors'])}" if r.get("errors") else ""))
             charts["cutin.svg"] = bar_svg(bars, title="Cut-in: seconds to first token, a short question 3 s behind a cold long prompt")
             md.append("\n![cut-in](cutin.svg)")
         elif s == "perf":

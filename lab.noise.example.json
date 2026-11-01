@@ -1,0 +1,7 @@
+{
+ "bands": {"decode": 0.02, "prefill": 0.015, "aggregate": 0.055, "cut-in": 0.03, "startup": 0.10},
+ "provisional": true,
+ "source": "example: provisional bands from seven same-patch runs with different image ids; replace with scripts/calibrate.py on same-image runs",
+ "measured": "2026-11-01",
+ "expires": "2026-11-15"
+}

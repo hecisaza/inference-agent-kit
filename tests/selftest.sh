@@ -87,8 +87,10 @@ rep=$(ls -dt /tmp/selftest-runs/2*/ 2>/dev/null | head -1)
 # verdict.py: the repro run (control shows, candidate does not) + a supporting second opinion -> READY; the inverse run -> NOT READY;
 # no repro and no review -> SAFE, UNVERIFIED; a collision line naming the PR -> NOT READY; a failed restore -> RERUN
 vd=$(mktemp -d); good=$(ls -dt /tmp/selftest-runs/2*/ | sed -n 2p); inv=$(ls -dt /tmp/selftest-runs/2*/ | sed -n 1p)
-echo "**EVIDENCE SUPPORTS THE CLAIM** — the fake reviewer agrees." > "$vd/REVIEW.md"
-python3 scripts/verdict.py "$good" --review "$vd/REVIEW.md" > "$vd/o1" 2>&1 && grep -q "Merge readiness: READY" "$vd/o1" && grep -q '"label": "evidence:ready"' "$good/verdict.json" && ok "verdict.py: repro confirmed + supporting second opinion -> READY" || bad "verdict READY: $(cat "$vd/o1")"
+printf '**EVIDENCE SUPPORTS THE CLAIM** — the fake reviewer agrees.\nCLAIM TEST: SOUND — it asserts the behaviour and keeps a control.\n' > "$vd/REVIEW.md"
+python3 scripts/verdict.py "$good" --review "$vd/REVIEW.md" > "$vd/o1" 2>&1 && grep -q "Merge readiness: READY" "$vd/o1" && grep -q '"label": "evidence:ready"' "$good/verdict.json" && ok "verdict.py: repro confirmed + the second opinion found the oracle sound -> READY" || bad "verdict READY: $(cat "$vd/o1")"
+printf '**EVIDENCE SUPPORTS THE CLAIM** — the fake reviewer agrees but did not look at the script.\n' > "$vd/REVIEW-nosound.md"
+python3 scripts/verdict.py "$good" --review "$vd/REVIEW-nosound.md" > "$vd/o1b" 2>&1 && grep -q "SAFE, UNVERIFIED.*oracle was not inspected" "$vd/o1b" && ok "verdict.py: repro confirmed without an inspected oracle -> SAFE, UNVERIFIED (a second opinion alone never makes READY)" || bad "verdict uninspected oracle: $(cat "$vd/o1b")"
 python3 scripts/verdict.py "$inv" > "$vd/o2" 2>&1 && grep -q "Merge readiness: NOT READY.*passes on the base and fails on the candidate" "$vd/o2" && ok "verdict.py: the candidate fails where the base passes -> NOT READY (regression)" || bad "verdict NOT READY: $(cat "$vd/o2")"
 printf 'COLLISION: patch 0040 is added by #7 #9\n' > "$vd/sync.txt"
 python3 scripts/verdict.py "$good" --review "$vd/REVIEW.md" --sync "$vd/sync.txt" --pr 7 > "$vd/o3" 2>&1 && grep -q "NOT READY.*collides" "$vd/o3" && ok "verdict.py: a patch-number collision naming the PR -> NOT READY" || bad "verdict collision: $(cat "$vd/o3")"
@@ -114,7 +116,16 @@ for name, f in (("slow", 0.9), ("fast", 1.1)):
     X["perf"] = {ctrl: [base], cand: [{**base, "decode_tps": [v * f for v in base["decode_tps"]], "prefill_tps": [v * f for v in base["prefill_tps"]], "batch_tps": [v * f for v in base["batch_tps"]]}]}
     json.dump(X, open(f"{d}/{name}/results.json", "w"))
 PY
-python3 scripts/verdict.py "$pv/slow" > "$pv/o1" 2>&1 && grep -q "NOT READY.*slower than the control" "$pv/o1" && ok "verdict.py: a 10 % slowdown beyond the noise -> NOT READY" || bad "verdict slow: $(cat "$pv/o1")"
+python3 scripts/verdict.py "$pv/slow" > "$pv/o1" 2>&1 && grep -q "RERUN.*single repetition is timing uncertainty" "$pv/o1" && ok "verdict.py: a 10 % slowdown in a single repetition -> RERUN (counterbalanced)" || bad "verdict slow single: $(cat "$pv/o1")"
+python3 - "$pv" <<'PY'
+import json, os, sys
+d = sys.argv[1]; R = json.load(open(f"{d}/slow/results.json")); R["meta"]["opts"]["reps"] = 2
+for s_ in R:
+    if s_ == "meta": continue
+    for t in R[s_]: R[s_][t] = R[s_][t] * 2   # two repetitions of the same observations
+os.makedirs(f"{d}/slow2", exist_ok=True); json.dump(R, open(f"{d}/slow2/results.json", "w"))
+PY
+python3 scripts/verdict.py "$pv/slow2" > "$pv/o1c" 2>&1 && grep -q "NOT READY.*slower than the control over counterbalanced repetitions" "$pv/o1c" && ok "verdict.py: the same slowdown over two repetitions -> NOT READY" || bad "verdict slow reps2: $(cat "$pv/o1c")"
 python3 - "$pv" <<'PY'
 import json, os
 d = sys_d = os.environ.get("PV") or __import__("sys").argv[1]
@@ -126,7 +137,9 @@ os.makedirs(f"{d}/startup", exist_ok=True); json.dump(R, open(f"{d}/startup/resu
 PY
 python3 scripts/verdict.py "$pv/startup" > "$pv/o5" 2>&1 && ! grep -q "NOT READY" "$pv/o5" && grep -q "startup -6%.*one sample a side: not called" "$pv/startup/VERDICT.md" && ok "verdict.py: a single-sample startup difference is reported, never called" || bad "verdict startup single sample: $(cat "$pv/o5") $(grep startup "$pv/startup/VERDICT.md")"
 printf 'Faster prefill\n\nThis change raises prefill throughput.\n' > "$pv/PR-perf.md"; printf 'Docs\n\nA wording fix.\n' > "$pv/PR-docs.md"
-python3 scripts/verdict.py "$pv/fast" --pr-file "$pv/PR-perf.md" > "$pv/o2" 2>&1 && grep -q "READY.*faster than the control as the PR claims" "$pv/o2" && ! grep -q "NOT READY" "$pv/o2" && ok "verdict.py: a 10 % speed-up on a PR that claims performance -> READY" || bad "verdict fast: $(cat "$pv/o2")"
+printf '**EVIDENCE SUPPORTS THE CLAIM** — the speed-up is there.\n' > "$pv/REVIEW-supports.md"
+python3 scripts/verdict.py "$pv/fast" --pr-file "$pv/PR-perf.md" --review "$pv/REVIEW-supports.md" > "$pv/o2" 2>&1 && grep -q "READY.*speed-up the pull request claims was measured" "$pv/o2" && ! grep -q "NOT READY" "$pv/o2" && ok "verdict.py: a claimed speed-up, measured and supported by the second opinion -> READY" || bad "verdict fast: $(cat "$pv/o2")"
+python3 scripts/verdict.py "$pv/fast" --pr-file "$pv/PR-perf.md" > "$pv/o2b" 2>&1 && grep -q "SAFE, UNVERIFIED" "$pv/o2b" && ok "verdict.py: a claimed speed-up without a second opinion stays SAFE, UNVERIFIED" || bad "verdict fast/no-review: $(cat "$pv/o2b")"
 python3 scripts/verdict.py "$pv/fast" --pr-file "$pv/PR-docs.md" > "$pv/o3" 2>&1 && grep -q "SAFE, UNVERIFIED.*noted but not counted" "$pv/o3" && ok "verdict.py: a speed-up on a PR that does not claim performance is noted, not counted" || bad "verdict fast/no-claim: $(cat "$pv/o3")"
 rm -rf "$pv"
 # hosttests.sh: a PR that adds a test which needs its fix -> confirmed; a test that passes without the fix -> not isolating; no tests -> no tests
@@ -138,7 +151,40 @@ printf 'import unittest\nclass T(unittest.TestCase):\n    def test_trivial(self)
 bash scripts/hosttests.sh --pr "$ht/pr" --base "$ht/base" --out "$ht/ht2.json" > "$ht/o2" 2>&1 && grep -q '"verdict": "not isolating"' "$ht/ht2.json" && ok "hosttests.sh: a test that passes without the change -> not isolating" || bad "hosttests not isolating: $(cat "$ht/o2")"
 rm "$ht/pr/tests/test_fix.py"; bash scripts/hosttests.sh --pr "$ht/pr" --base "$ht/base" --out "$ht/ht3.json" > "$ht/o3" 2>&1 && grep -q '"verdict": "no tests"' "$ht/ht3.json" && ok "hosttests.sh: no test file in the PR -> no tests" || bad "hosttests none: $(cat "$ht/o3")"
 # verdict.py: a green run plus the PR's own tests confirmed -> READY; startup time appears in the performance facts
-cp "$ht/ht1.json" "$full_run/hosttests.json"; python3 scripts/verdict.py "$full_run" > "$ht/o4" 2>&1 && grep -q "READY.*own tests fail on the base and pass on the pull request" "$ht/o4" && grep -q "startup" "$full_run/VERDICT.md" && ok "verdict.py: the PR's own tests confirmed -> READY; startup time among the performance facts" || bad "verdict hosttests: $(cat "$ht/o4") $(grep performance "$full_run/VERDICT.md")"
+cp "$ht/ht1.json" "$full_run/hosttests.json"; python3 scripts/verdict.py "$full_run" > "$ht/o4" 2>&1 && grep -q "SAFE, UNVERIFIED.*tested by the author, oracle not independently inspected" "$ht/o4" && grep -q "startup" "$full_run/VERDICT.md" && ok "verdict.py: the PR's own tests alone -> SAFE (tested by the author); startup among the facts" || bad "verdict hosttests alone: $(cat "$ht/o4")"
+printf 'NO REGRESSION SHOWN, CLAIM NOT TESTED\nAUTHOR TESTS: SOUND — they assert the fix and fail on the base for that reason.\n' > "$ht/REVIEW-at.md"
+python3 scripts/verdict.py "$full_run" --review "$ht/REVIEW-at.md" > "$ht/o5" 2>&1 && grep -q "READY.*own tests fail on the base and pass on the pull request, and the second opinion inspected them" "$ht/o5" && ok "verdict.py: the PR's own tests, inspected and sound -> READY" || bad "verdict hosttests inspected: $(cat "$ht/o5")"
+# manifest: a closed PR is HISTORICAL; a head-on-merge-base candidate is never current READY
+printf '{"pr_state": "closed", "candidate_kind": "merged onto the current base", "head_sha": "abcdef12", "base_sha": "12345678"}\n' > "$ht/man-closed.json"
+python3 scripts/verdict.py "$full_run" --review "$ht/REVIEW-at.md" --manifest "$ht/man-closed.json" > "$ht/o6" 2>&1 && grep -q "HISTORICAL — READY" "$ht/o6" && grep -q '"label": "evidence:historical"' "$full_run/verdict.json" && ok "verdict.py: a run of a closed PR is HISTORICAL, labelled so" || bad "verdict historical: $(cat "$ht/o6")"
+printf '{"pr_state": "open", "candidate_kind": "head against its merge-base 12345678 (no clean merge)", "head_sha": "abcdef12", "base_sha": "12345678"}\n' > "$ht/man-fb.json"
+python3 scripts/verdict.py "$full_run" --review "$ht/REVIEW-at.md" --manifest "$ht/man-fb.json" > "$ht/o7" 2>&1 && grep -q "SAFE, UNVERIFIED.*not the pull request integrated with the current base" "$ht/o7" && ok "verdict.py: verified on a merge-base candidate -> SAFE (not current readiness)" || bad "verdict fallback: $(cat "$ht/o7")"
+# calibrated bands: with lab.noise.example.json a 2.5 % decode loss over two repetitions blocks; an expired file falls back to floors
+python3 - "$pv" "$full_run" <<'PY'
+import json, os, sys
+pv, src = sys.argv[1], sys.argv[2]; R = json.load(open(os.path.join(src, "results.json"))); cand, ctrl = R["meta"]["candidate"], R["meta"]["control"]
+R["meta"]["opts"]["reps"] = 2
+base = {"ok": True, "decode_tps": [100.0, 100.5, 99.5], "prefill_tps": [1000.0, 1002.0, 998.0], "batch_tps": [300.0, 301.0, 299.0], "errors": []}
+R["perf"] = {ctrl: [base, base], cand: [{**base, "decode_tps": [97.5, 97.6, 97.4]}, {**base, "decode_tps": [97.5, 97.6, 97.4]}]}
+for s_ in ("smoke", "boundary"): R[s_] = {t: R[s_][t] * 2 for t in R[s_]}
+os.makedirs(f"{pv}/cal", exist_ok=True); json.dump(R, open(f"{pv}/cal/results.json", "w"))
+json.dump({"bands": {"decode": 0.02}, "provisional": True, "expires": "2000-01-01"}, open(f"{pv}/expired.json", "w"))
+PY
+python3 scripts/verdict.py "$pv/cal" --noise lab.noise.example.json > "$pv/o8" 2>&1 && grep -q "NOT READY.*decode -2%" "$pv/o8" && grep -q "provisional calibration" "$pv/cal/VERDICT.md" && ok "verdict.py: a 2.5 % decode loss over two repetitions blocks under the calibrated ±2 % band" || bad "verdict calibrated: $(cat "$pv/o8")"
+python3 scripts/verdict.py "$pv/cal" --noise "$pv/expired.json" > "$pv/o9" 2>&1 && ! grep -q "NOT READY" "$pv/o9" && grep -q "calibration expired" "$pv/cal/VERDICT.md" && ok "verdict.py: an expired calibration falls back to the floors and says so" || bad "verdict expired calibration: $(cat "$pv/o9")"
+# calibrate.py: provisional bands; same-image runs give bands; mixed images are refused
+python3 scripts/calibrate.py --out "$pv/noise-prov.json" --provisional decode=0.02 prefill=0.015 --days 7 >/dev/null && grep -q '"provisional": true' "$pv/noise-prov.json" && ok "calibrate.py: provisional bands written with an expiry" || bad "calibrate provisional"
+python3 - "$pv" "$full_run" <<'PY'
+import json, os, sys
+pv, src = sys.argv[1], sys.argv[2]; R = json.load(open(os.path.join(src, "results.json"))); cand, ctrl = R["meta"]["candidate"], R["meta"]["control"]
+R["meta"]["targets"][cand]["artifact_id"] = "sameimage0001"; R["meta"]["targets"][ctrl]["artifact_id"] = "sameimage0001"
+base = {"ok": True, "decode_tps": [100.0, 101.0, 99.0], "prefill_tps": [1000.0, 1010.0, 990.0], "batch_tps": [300.0, 303.0, 297.0], "errors": []}
+R["perf"] = {ctrl: [base], cand: [{**base, "decode_tps": [101.0, 102.0, 100.0]}]}
+os.makedirs(f"{pv}/same", exist_ok=True); json.dump(R, open(f"{pv}/same/results.json", "w"))
+R["meta"]["targets"][cand]["artifact_id"] = "otherimage002"; os.makedirs(f"{pv}/mixed", exist_ok=True); json.dump(R, open(f"{pv}/mixed/results.json", "w"))
+PY
+python3 scripts/calibrate.py --out "$pv/noise-cal.json" "$pv/same" > "$pv/o10" 2>&1 && grep -q '"provisional": false' "$pv/noise-cal.json" && python3 -c "import json,sys; b=json.load(open(sys.argv[1]))['bands']; assert 0.01 <= b['decode'] <= 0.03, b" "$pv/noise-cal.json" && ok "calibrate.py: bands from a same-image run (decode band from a 1 % observed difference)" || bad "calibrate same-image: $(cat "$pv/o10")"
+python3 scripts/calibrate.py --out "$pv/noise-bad.json" "$pv/mixed" > "$pv/o11" 2>&1; [ $? != 0 ] && grep -q "do not share an artifact id" "$pv/o11" && ok "calibrate.py: a mixed-image run is refused" || bad "calibrate mixed: $(cat "$pv/o11")"
 rm -f "$full_run/hosttests.json"; rm -rf "$ht"
 # evidence-review.sh: bundle (diff, report, results, suites, run facts) + a fake reviewer -> REVIEW.md next to the run
 er=$(mktemp -d); git init -q "$er/co"; echo a > "$er/co/f"; git -C "$er/co" add f; git -C "$er/co" -c user.name=t -c user.email=t@example.com commit -q -m base
@@ -182,7 +228,7 @@ R["repro"] = {cand: [{"ok": True, "role": "candidate", "exit": 0, "outcome": "pa
               ctrl: [{"ok": False, "role": "control", "exit": 127, "outcome": "error", "shows_problem": False, "cmd": "x", "output_tail": "bash: x: command not found"}]}
 json.dump(R, open(os.path.join(d, "results.json"), "w"))
 PY
-python3 scripts/verdict.py "$vi" > "$vi/o2" 2>&1 && grep -q "SAFE, UNVERIFIED.*errored on a build: inconclusive" "$vi/o2" && grep -q "repro script: inconclusive" "$vi/VERDICT.md" && ! grep -q "Merge readiness: READY" "$vi/o2" && ok "verdict.py: a repro script that errors on the base is inconclusive, never READY" || bad "verdict repro error: $(cat "$vi/o2") $(grep script "$vi/VERDICT.md")"
+python3 scripts/verdict.py "$vi" > "$vi/o2" 2>&1 && grep -q "RERUN.*errored on a build" "$vi/o2" && grep -q "repro script: inconclusive" "$vi/VERDICT.md" && ok "verdict.py: a repro script that errors on a build -> RERUN (it judged nothing)" || bad "verdict repro error: $(cat "$vi/o2") $(grep script "$vi/VERDICT.md")"
 rm -rf "$vi"
 # verdict.py: a claim test (claims/) that fails on both builds is inconclusive -> SAFE, UNVERIFIED, not NOT READY
 vc=$(mktemp -d); python3 - "$cr" "$vc" <<'PY'

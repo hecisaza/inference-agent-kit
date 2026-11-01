@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# evidence-review.sh RUN_DIR --checkout DIR --base SHA --head SHA [--pr-url URL] [--pr-file FILE] [--timeout MIN]
+# evidence-review.sh RUN_DIR --checkout DIR --base SHA --head SHA [--pr-url URL] [--pr-file FILE] [--script FILE] [--timeout MIN]
 #
 # A second opinion on a pairtest run from a different model than the one that did the work, read-only. Bundles the
 # pull request's diff, the report, the raw results, the suites' source and the run facts under RUN_DIR/review/, hands
@@ -11,11 +11,12 @@
 set -uo pipefail
 here=$(cd "$(dirname "$0")/.." && pwd)
 run=${1:?usage: evidence-review.sh RUN_DIR --checkout DIR --base SHA --head SHA [--pr-url URL] [--pr-file FILE] [--timeout MIN]}; shift
-checkout=""; base=""; head=""; pr_url=""; pr_file=""; timeout_min=20
+checkout=""; base=""; head=""; pr_url=""; pr_file=""; timeout_min=20; script=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --checkout) checkout=$2; shift 2;; --base) base=$2; shift 2;; --head) head=$2; shift 2;;
     --pr-url) pr_url=$2; shift 2;; --pr-file) pr_file=$2; shift 2;; --timeout) timeout_min=$2; shift 2;;
+    --script) script=$2; shift 2;;
     *) echo "unexpected argument $1" >&2; exit 2;;
   esac
 done
@@ -27,6 +28,8 @@ b="$run/review"; rm -rf "$b"; mkdir -p "$b/suites"
 git -C "$checkout" diff "$base" "$head" > "$b/pr.patch" 2>/dev/null || missing "git diff $base $head failed in $checkout"
 [ -s "$b/pr.patch" ] || missing "empty diff between $base and $head"
 cp "$run/report.md" "$run/results.json" "$b/"
+cp "$run/hosttests.json" "$b/hosttests.json" 2>/dev/null || true          # the PR's own tests, raw output included
+if [ -n "$script" ] && [ -s "$script" ]; then cp "$script" "$b/executed-script.sh"; fi   # the claim or repro script that ran
 cp "$here"/suites/*.py "$b/suites/"; cp "$here/scripts/report.py" "$b/report.py"
 if [ -n "$pr_file" ] && [ -s "$pr_file" ]; then cp "$pr_file" "$b/PR.md"; else printf '%s\n\n(no description was available)\n' "${pr_url:-the pull request}" > "$b/PR.md"; fi
 python3 - "$run" "$b/run.txt" <<'PY'
