@@ -31,6 +31,7 @@ HASH = re.compile(r"^[0-9a-f]{12}$")
 LABEL = {"READY": "ready", "SAFE, UNVERIFIED": "unverified", "NOT READY": "blocked", "RERUN": "rerun"}
 REVIEW_VERDICTS = ["EVIDENCE UNRELIABLE", "EVIDENCE CONTRADICTS THE CLAIM", "EVIDENCE SUPPORTS THE CLAIM", "NO REGRESSION SHOWN, CLAIM NOT TESTED"]
 FLOOR = {"decode": 0.03, "prefill": 0.03, "aggregate": 0.05, "cut-in": 0.03, "startup": 0.10}   # used only without a calibration
+ABS_FLOOR = {"cut-in": 0.2, "startup": 10.0}   # seconds: a latency difference smaller than this is never called, whatever the ratio
 PERF = [("decode", "perf", lambda r: r.get("decode_tps") or [], 1), ("prefill", "perf", lambda r: r.get("prefill_tps") or [], 1),
         ("aggregate", "perf", lambda r: r.get("batch_tps") or [], 1), ("cut-in", "cutin", lambda r: [x.get("short") for x in r.get("rounds", [])], -1),
         ("startup", "startup", lambda r: r.get("seconds_per_start") or [], -1)]
@@ -86,7 +87,8 @@ def performance(R, cand, ctrl, bands):
             continue
         band = (bands or {}).get(name, FLOOR[name]); delta = sign * (c - k) / k
         call = "slower" if delta < -band else ("faster" if delta > band else "same"); single = min(nc, nk) < 2
-        out.append({"metric": name, "delta": delta, "band": band, "candidate": c, "control": k, "call": "same" if single else call, "single": single})
+        tiny = abs(c - k) < ABS_FLOOR.get(name, 0.0)   # a latency difference below the absolute floor is noise at any ratio
+        out.append({"metric": name, "delta": delta, "band": band, "candidate": c, "control": k, "call": "same" if (single or tiny) else call, "single": single, "tiny": tiny})
     return out
 
 
@@ -181,8 +183,13 @@ def main():
     perf = performance(R, cand, ctrl, bands) if cand and ctrl else []
     slow = [x for x in perf if x["call"] == "slower"]; fast = [x for x in perf if x["call"] == "faster"]
     if perf:
-        facts.append(f"performance against the control ({band_note}): " + " · ".join(
-            f"{x['metric']} {x['delta']:+.0%} (±{x['band']:.0%}{', ' + x['call'] if x['call'] != 'same' else ''}{', one sample a side: not called' if x.get('single') else ''})" for x in perf))
+        def perf_note(x):
+            n = f"{x['metric']} {x['delta']:+.0%} (±{x['band']:.0%}"
+            if x["call"] != "same": n += f", {x['call']}"
+            if x.get("single"): n += ", one sample a side: not called"
+            elif x.get("tiny") and abs(x["delta"]) > x["band"]: n += f", {abs(x['candidate'] - x['control']):.2f} s apart, below the {ABS_FLOOR[x['metric']]:g} s floor: not called"
+            return n + ")"
+        facts.append(f"performance against the control ({band_note}): " + " · ".join(perf_note(x) for x in perf))
     adm_c, adm_k = admission(R, cand, ctrl)
     if adm_c is not None:
         facts.append("cut-in admission (short request answered before the long prompt's first token): " + f"candidate {'yes' if adm_c else 'no'}, control {'yes' if adm_k else 'no'}")

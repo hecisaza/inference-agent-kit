@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# claim-agent.sh RUN_DIR --pr-url URL [--out FILE] [--timeout S]
+# claim-agent.sh RUN_DIR --pr-url URL [--out FILE] [--timeout S] [--previous FILE --audit TEXT]
 #
 # The verify step: when a run ends SAFE, UNVERIFIED, an agent writes the claim test the suites lacked, from the pull
 # request's diff and description, the second opinion (which names what would exercise the change) and the report. The
@@ -16,10 +16,11 @@
 set -uo pipefail
 KIT=$(cd "$(dirname "$0")/.." && pwd); export KIT
 run=${1:?usage: claim-agent.sh RUN_DIR --pr-url URL [--out FILE] [--timeout S]}; shift
-pr_url=""; out=""; timeout_s=${AGENT_TIMEOUT_S:-1800}
+pr_url=""; out=""; timeout_s=${AGENT_TIMEOUT_S:-1800}; previous=""; audit=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --pr-url) pr_url=$2; shift 2;; --out) out=$2; shift 2;; --timeout) timeout_s=$2; shift 2;;
+    --previous) previous=$2; shift 2;; --audit) audit=$2; shift 2;;
     *) echo "unexpected argument $1" >&2; exit 2;;
   esac
 done
@@ -36,6 +37,13 @@ cp "$run/REVIEW.md" "$w/REVIEW.md" 2>/dev/null || echo "(no second opinion was p
 cp "$KIT/suites/common.py" "$w/common.py"
 sed -e "s#{{PR_URL}}#${pr_url:-the pull request}#g" -e "s#{{LIVE_API}}#$LIVE_API#g" -e "s#{{LIVE_MODEL}}#$LIVE_MODEL#g" -e "s#{{KIT}}#$KIT#g" \
   "$KIT/templates/CLAIM-TASK.md" > "$w/TASK.md"
+if [ -n "$previous" ] && [ -s "$previous" ]; then   # a claim test exists but the second opinion found its oracle unsound: fix it, do not start over
+  cp "$previous" "$w/previous-claim.sh"
+  { echo; echo "## A previous claim test exists and was judged unsound"; echo
+    echo "\`previous-claim.sh\` is the claim test an earlier run executed. The second opinion read it and found its oracle unsound:"; echo
+    echo "> ${audit:-no reason was recorded}"; echo
+    echo "Start from it. Keep what is right, fix what the audit names (typically: assert the first response's status and content as well as the follow-up, keep a capability-preserving control, test the claim rather than a symptom another change could also produce), and write the result as \`claim.sh\`."; } >> "$w/TASK.md"
+fi
 
 run_agent() {  # $1: round
   log "agent round $1: $AGENT_CMD (timeout ${timeout_s}s)"

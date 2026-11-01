@@ -172,6 +172,14 @@ json.dump({"bands": {"decode": 0.02}, "provisional": True, "expires": "2000-01-0
 PY
 python3 scripts/verdict.py "$pv/cal" --noise lab.noise.example.json > "$pv/o8" 2>&1 && grep -q "NOT READY.*decode -2%" "$pv/o8" && grep -q "provisional calibration" "$pv/cal/VERDICT.md" && ok "verdict.py: a 2.5 % decode loss over two repetitions blocks under the calibrated ±2 % band" || bad "verdict calibrated: $(cat "$pv/o8")"
 python3 scripts/verdict.py "$pv/cal" --noise "$pv/expired.json" > "$pv/o9" 2>&1 && ! grep -q "NOT READY" "$pv/o9" && grep -q "calibration expired" "$pv/cal/VERDICT.md" && ok "verdict.py: an expired calibration falls back to the floors and says so" || bad "verdict expired calibration: $(cat "$pv/o9")"
+# absolute latency floor: a 17 % cut-in difference that is 0.06 s is noise at any ratio
+python3 - "$pv" "$full_run" <<'PY'
+import json, os, sys
+pv, src = sys.argv[1], sys.argv[2]; R = json.load(open(os.path.join(src, "results.json"))); cand, ctrl = R["meta"]["candidate"], R["meta"]["control"]
+R["cutin"] = {ctrl: [{"ok": True, "rounds": [{"short": 0.35, "long": 20.0, "admitted": True}] * 3, "errors": []}], cand: [{"ok": True, "rounds": [{"short": 0.41, "long": 20.1, "admitted": True}] * 3, "errors": []}]}
+os.makedirs(f"{pv}/tiny", exist_ok=True); json.dump(R, open(f"{pv}/tiny/results.json", "w"))
+PY
+python3 scripts/verdict.py "$pv/tiny" --noise lab.noise.example.json > "$pv/o12" 2>&1 && ! grep -qE "RERUN|NOT READY" "$pv/o12" && grep -q "below the 0.2 s floor: not called" "$pv/tiny/VERDICT.md" && ok "verdict.py: a sub-0.2 s cut-in difference is not called whatever the ratio" || bad "verdict tiny latency: $(cat "$pv/o12") $(grep cut-in "$pv/tiny/VERDICT.md")"
 # calibrate.py: provisional bands; same-image runs give bands; mixed images are refused
 python3 scripts/calibrate.py --out "$pv/noise-prov.json" --provisional decode=0.02 prefill=0.015 --days 7 >/dev/null && grep -q '"provisional": true' "$pv/noise-prov.json" && ok "calibrate.py: provisional bands written with an expiry" || bad "calibrate provisional"
 python3 - "$pv" "$full_run" <<'PY'
