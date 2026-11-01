@@ -55,6 +55,24 @@ def current_rule(vj, facts, cls):
     return "SAFE, UNVERIFIED", "READY under the earlier rule rested on a supporting second opinion or a measured speed-up without an audited test"
 
 
+_REPO_CACHE = {}
+
+
+def resolve_repo(slug):
+    """An evidence branch names the repository as owner-repo; owners and repositories both carry dashes, so try each
+    split from the left and keep the first one GitHub knows (cached)."""
+    if slug in _REPO_CACHE:
+        return _REPO_CACHE[slug]
+    parts = slug.split("-")
+    for i in range(1, len(parts)):
+        cand = "-".join(parts[:i]) + "/" + "-".join(parts[i:])
+        try:
+            gh(["repo", "view", cand, "--json", "name"]); _REPO_CACHE[slug] = cand; return cand
+        except subprocess.CalledProcessError:
+            continue
+    _REPO_CACHE[slug] = slug.replace("-", "/", 1); return _REPO_CACHE[slug]
+
+
 def badge(cls, historical):
     key = {"READY": "ready", "SAFE, UNVERIFIED": "safe", "NOT READY": "block", "RERUN": "info"}.get(cls, "info")
     b = f'<span class="badge {key}">{esc(cls)}</span>'
@@ -73,9 +91,7 @@ def main():
         if not m:
             continue
         slug, pr = m.group(1), int(m.group(2))
-        owner_repo = None
-        for cand in [slug.replace("-", "/", 1)]:   # owner-repo -> owner/repo (the owner has no dash in these labs)
-            owner_repo = cand
+        owner_repo = resolve_repo(slug)   # owner-repo with dashes in both parts: the first split GitHub knows
         tip = json.loads(api(f"repos/{a.repo}/branches/{br}"))["commit"]["sha"]
         try:
             runs = sorted(x["name"] for x in json.loads(api(f"repos/{a.repo}/contents/docs/evidence?ref={br}")) if x["type"] == "dir")
