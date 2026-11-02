@@ -43,6 +43,8 @@ while IFS=$'\t' read -r n created url title; do
 done < <(python3 -c 'import json, sys
 for i in json.load(sys.stdin): print(i["number"], i["createdAt"], i["url"], i["title"], sep="\t")' <<<"$issues")
 echo
+pending=$(gh run list -R "$FORK" --workflow "$WF" --limit 50 --json status --jq '[.[] | select(.status != "completed")] | length' 2>/dev/null || echo 0)
+[ "${pending:-0}" != 0 ] && echo "$pending $WF run(s) queued or in progress on $FORK: their outcomes appear here when they finish"
 if [ "$DISPATCH" = 1 ]; then
   for u in "${todo[@]:-}"; do [ -n "$u" ] || continue; gh workflow run "$WF" -R "$FORK" -f "issue=$u" -f "mode=$MODE" && echo "dispatched $u ($MODE)"; done
   echo "${#todo[@]} dispatched on $FORK ($WF, mode $MODE)"
