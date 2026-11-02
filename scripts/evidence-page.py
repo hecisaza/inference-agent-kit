@@ -73,6 +73,34 @@ def resolve_repo(slug):
     _REPO_CACHE[slug] = slug.replace("-", "/", 1); return _REPO_CACHE[slug]
 
 
+ISSUE_BADGE = {"FIXED": "ready", "FIX PROPOSED": "safe", "FIX FAILS": "block", "REPRODUCED": "block", "NOT REPRODUCIBLE HERE": "safe",
+               "UNCLEAR": "info", "NEEDS THE LAB": "info", "OUT OF SCOPE": "hist", "TRIAGED": "info"}
+
+
+def issue_row(repo, br, owner_repo, n):
+    """One issue's evidence branch: the latest run's outcome, the issue's title and state now, pinned links to every run."""
+    tip = json.loads(api(f"repos/{repo}/branches/{br}"))["commit"]["sha"]
+    try:
+        runs = sorted(x["name"] for x in json.loads(api(f"repos/{repo}/contents/docs/evidence?ref={br}")) if x["type"] == "dir")
+    except subprocess.CalledProcessError:
+        runs = []
+    vj = {}
+    if runs:
+        try:
+            vj = json.loads(api(f"repos/{repo}/contents/docs/evidence/{runs[-1]}/verdict.json?ref={br}", raw=True) or "{}")
+        except (subprocess.CalledProcessError, ValueError):
+            vj = {}
+    state, title, url = "?", "", f"https://github.com/{owner_repo}/issues/{n}"
+    try:
+        j = json.loads(gh(["issue", "view", str(n), "-R", owner_repo, "--json", "state,title,url"])); state = j["state"].lower(); title = j["title"]; url = j["url"]
+    except subprocess.CalledProcessError:
+        pass
+    tri = vj.get("triage") or {}
+    return {"n": n, "url": url, "title": title, "state": state, "cls": vj.get("class") or "?", "reason": (vj.get("reasons") or [""])[0], "pr": vj.get("pr") or "",
+            "test_class": vj.get("test_class") or "", "triage": (tri.get("kind") or "") + ((" (" + tri.get("confidence") + ")") if tri.get("confidence") else ""),
+            "latest": runs[-1] if runs else "", "n_runs": len(runs), "links": " · ".join(f'<a href="https://github.com/{repo}/tree/{tip}/docs/evidence/{r}">{esc(r)}</a>' for r in runs)}
+
+
 def badge(cls, historical):
     key = {"READY": "ready", "SAFE, UNVERIFIED": "safe", "NOT READY": "block", "RERUN": "info"}.get(cls, "info")
     b = f'<span class="badge {key}">{esc(cls)}</span>'
@@ -85,8 +113,11 @@ def main():
     ap.add_argument("--title", default="Pull requests tested on hardware"); ap.add_argument("--intro", default="")
     a = ap.parse_args()
     branches = [b["name"] for b in json.loads(api(f"repos/{a.repo}/branches?per_page=100")) if b["name"].startswith("evidence/")]
-    rows, runs_total, pr_states = [], 0, {}
+    rows, runs_total, pr_states, irows = [], 0, {}, []
     for br in sorted(branches):
+        mi = re.match(r"evidence/(.+)-issue-(\d+)$", br)
+        if mi:
+            irows.append(issue_row(a.repo, br, resolve_repo(mi.group(1)), int(mi.group(2)))); continue
         m = re.match(r"evidence/(.+)-pr-(\d+)$", br)
         if not m:
             continue
@@ -154,10 +185,21 @@ def main():
                    f'<td>{badge(r["cur"], r["hist"])}' + (f'<div class="small">at the time: {esc(r["cls"])} — {esc(r["cur_why"])}</div>' if r["cur"] != r["cls"] else "") + f'</td><td class="small">{r["links"]}</td></tr>')
     out.append("</tbody></table></div>")
     out.append('<p class="small">Runs judged before the current rule (Nov 1, 2026) show the class the same facts give under it, with the class recorded at the time underneath. A run of a pull request that was closed or merged at execution, or is closed now, is marked HISTORICAL.</p>')
+    if irows:
+        iorder = {"FIXED": 0, "FIX FAILS": 1, "FIX PROPOSED": 2, "REPRODUCED": 3, "NEEDS THE LAB": 4, "UNCLEAR": 5, "NOT REPRODUCIBLE HERE": 6, "TRIAGED": 7, "OUT OF SCOPE": 8}
+        irows.sort(key=lambda r: (iorder.get(r["cls"], 9), -r["n"]))
+        out.append(f'<h2>Issues</h2><p class="sub">{len(irows)} issues worked by the issue pipeline: a triage says how the lab can work on it; an issue reproducible through the API goes to an agent that reproduces it on the live build and fixes it on a branch; the fix is then tested like any pull request.</p>')
+        out.append('<div class="scroll"><table><thead><tr><th>Issue</th><th>Title · state now</th><th>Triage</th><th>Outcome</th><th>Why</th><th>Fix · its test</th><th>Runs</th></tr></thead><tbody>')
+        for r in irows:
+            fix = (f'<a href="{esc(r["pr"])}">{esc(r["pr"].rsplit("/", 1)[-1] and "#" + r["pr"].rsplit("/", 1)[-1])}</a>' + (f' · {esc(r["test_class"])}' if r["test_class"] else "")) if r["pr"] else "—"
+            out.append(f'<tr><td class="pr"><a href="{esc(r["url"])}">#{r["n"]}</a></td><td>{esc(r["title"])}<div class="small">{esc(r["state"])}</div></td><td class="small">{esc(r["triage"]) or "—"}</td>'
+                       f'<td><span class="badge {ISSUE_BADGE.get(r["cls"], "info")}">{esc(r["cls"])}</span></td><td class="small">{esc(r["reason"])}</td><td class="small">{fix}</td><td class="small">{r["links"]}</td></tr>')
+        out.append("</tbody></table></div>")
+        out.append('<p class="small"><b>FIXED</b> a fix is open and its hardware test is READY. <b>FIX PROPOSED</b> a fix is open, its test is not READY yet. <b>FIX FAILS</b> the fix\'s test is NOT READY. <b>REPRODUCED</b> the problem shows on the live build, no fix yet. <b>NOT REPRODUCIBLE HERE</b> tried on the live build, did not show. <b>UNCLEAR</b> the agent\'s reproduction was not confirmed by its own script. <b>NEEDS THE LAB</b> a configuration, restart, crash or load condition a person schedules. <b>OUT OF SCOPE</b> a feature request, a question, or other hardware. <b>TRIAGED</b> classified only.</p>')
     out.append('<h2>How to read the verdicts</h2><p><span class="badge ready">READY</span> every regression check passed, no slowdown beyond the calibrated band, and audited evidence verifies the claim (a claim or reproduction script, or the PR\'s own tests, that fail on the base and pass on the PR and that the second opinion inspected and found sound; or a claimed speed-up measured beyond the band that it supports). <span class="badge safe">SAFE, UNVERIFIED</span> nothing regressed, nothing slowed down, the claim is not verified to that standard. <span class="badge block">NOT READY</span> a failed suite, unexplained reply differences, a slowdown confirmed over repetitions, a failing claim test, a patch-number collision, or a contradicting second opinion. <span class="badge info">RERUN</span> the measurement is not trustworthy (incomplete matrix, control failure, a script error, a single-repetition slowdown). <span class="badge hist">HISTORICAL</span> the PR was closed or merged when the run executed: a record, not current readiness.</p>')
     out.append('<div class="foot">Method and tooling: <a href="https://github.com/hecisaza/inference-agent-kit">inference-agent-kit</a>. A run folder holds the report, the raw results.json, the executed script, the PR\'s own tests\' raw output, the second opinion, the verdict and the run manifest. Nothing on this page was posted to the upstream repository.</div></div>')
     open(a.out, "w").write("\n".join(out) + "\n")
-    print(f"wrote {a.out}: {len(rows)} PRs, {runs_total} runs, counts {counts}")
+    print(f"wrote {a.out}: {len(rows)} PRs, {runs_total} runs, counts {counts}; {len(irows)} issues")
 
 
 if __name__ == "__main__":

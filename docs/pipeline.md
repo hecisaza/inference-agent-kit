@@ -13,9 +13,11 @@ workflows live in the fork's default branch (`.github/workflows/spark-test.yml` 
                                                       evidence/ branch + run summary (a PR elsewhere)
 
   issue here, labelled `agent` ─┐
-  "Run workflow" + issue URL    ─┴─► spark-issue ─► agent: reproduce on live, fix on a branch ─► issue-agent.sh confirms
-                                                    the repro on live ─► PR opened with `test` ─► spark-test (same run)
-                                                    not reproduced ─► comment on the issue (here) / draft (elsewhere)
+  "Run workflow" + issue URL    ─┼─► spark-issue ─► triage (api / lab / feature / elsewhere)
+  issue-sweep.sh --dispatch     ─┘                 api ─► agent: reproduce on live, fix on a branch ─► issue-agent.sh
+                                                    confirms the repro on live ─► PR opened with `test` ─► spark-test
+                                                    (same run) ─► issue outcome (FIXED … OUT OF SCOPE) ─► evidence/
+                                                    …-issue-N branch + comment and label (here) / run summary (elsewhere)
 ```
 
 ## What is compared
@@ -34,10 +36,12 @@ the test merge.
 | start a test of a PR anywhere (the upstream recipe) | a person runs the workflow with the PR's URL | the dispatch: a PR's code and its `tests/repro-issue-*.sh` run on the lab and on the runner, so dispatch only a PR you have read |
 | build, ship, test PR against base, restore live, evidence, comment on the fork's PR | the workflow | none; a failed build or suite is reported as such |
 | anything on another repository (a comment on the upstream PR, a PR upstream) | a person, from the run summary and the evidence branch | the owner's go, every time |
-| start the agent on an issue | a person adds the label `agent` or runs the workflow with the issue URL | the label or the dispatch |
+| start the agent on an issue | a person adds the label `agent`, runs the workflow with the issue URL (mode `full` or `triage`), or runs `scripts/issue-sweep.sh OWNER/REPO --fork FORK --dispatch` for every open issue without a run | the label or the dispatch: an issue's text goes through an agent on the runner, and an `api` issue's reproduction hits the live build, so dispatch issues you have read |
+| triage: how can this lab work on it | a triage agent, read-only, writes `triage.json` (`templates/ISSUE-TRIAGE-TASK.md`): `api` (reproducible through the served API), `lab` (needs a configuration, a restart, a crash, hardware or a load the live build does not take), `feature`, `elsewhere` | only `api` goes on; `lab` ends as NEEDS THE LAB with the condition written down, the others as OUT OF SCOPE; a missing or unusable triage is treated as `api` |
 | reproduce, fix, write `REPRO.md`, `tests/repro-issue-N.sh`, `PR.md` | the agent, in a checkout, with no token | the task template (`templates/ISSUE-TASK.md`) and `AGENTS.md` |
-| confirm the reproduction on the live build, push the branch, open the PR on the fork, label it | `scripts/issue-agent.sh` | the agent's script must exit non-zero against live; otherwise the verdict becomes `unclear` and no PR is opened |
+| confirm the reproduction on the live build, push the branch, open the PR on the fork, label it | `scripts/issue-agent.sh` | the agent's script must exit non-zero against live; otherwise the verdict becomes `unclear` and no PR is opened. A reproduction without a fix is confirmed the same way and ends as REPRODUCED, no PR |
 | test that PR against its base | spark-test, in the same run | the repro suite: the script must show the problem on the base and not on the PR, or the run fails |
+| issue outcome | `scripts/issue-verdict.py`, from the agent's `outcome.json` and the PR's test verdict: **FIXED** (PR open, test READY) / **FIX PROPOSED** (PR open, test SAFE, UNVERIFIED or RERUN) / **FIX FAILS** (test NOT READY) / **REPRODUCED** (confirmed on live, no fix) / **NOT REPRODUCIBLE HERE** / **UNCLEAR** / **NEEDS THE LAB** / **OUT OF SCOPE** / **TRIAGED** | a comment and the label `issue:<outcome>` on an issue of the fork; the run summary for an issue elsewhere; FIXED is verified, not merged |
 | second opinion on the evidence | `scripts/evidence-review.sh`: a different model (Codex by default), read-only, gets the PR diff, the report, the raw results and the suites' source; recomputes the report, says which changed paths the suites exercised, grades each claim | advisory: its verdict is appended to the comment and kept with the evidence; a missing reviewer is reported, never hidden |
 | merge readiness | `scripts/verdict.py`, from the results, the second opinion and stage 0's collision check: **READY** (every suite green, replies identical or different exactly as claimed, no slowdown, the claim exercised and confirmed — repro, a supporting second opinion, or a measured speed-up — no collision) / **SAFE, UNVERIFIED** (no regression, no slowdown, the changed path not exercised) / **NOT READY** (a failed suite, unexplained differences, a slowdown beyond the noise, a repro still failing, a collision, a contradicting second opinion) / **RERUN** (restore failed, the control failed, evidence unreliable). Performance = decode, prefill and aggregate tokens/s from the `perf` suite and the cut-in latency, candidate against control, counted only beyond the larger of ±3 % and the rounds' spread | first lines of the comment; label `evidence:ready|unverified|blocked|rerun` on PRs of the fork |
 | merge, or carry the fix upstream | a person | READY is the evidence's word, not the merge; SAFE, UNVERIFIED is a code-review decision; the owner's go for anything upstream |
@@ -85,8 +89,11 @@ fork as a library a PR author can be handed. A NOT READY on someone else's PR is
 - On a verify run: the agent's claim attempt (task, rounds, the run on the base) as an artifact, and `claims/…sh` on main.
 - `REVIEW.md`: the second opinion (verdict line: EVIDENCE SUPPORTS THE CLAIM / NO REGRESSION SHOWN, CLAIM NOT TESTED /
   EVIDENCE CONTRADICTS THE CLAIM / EVIDENCE UNRELIABLE), or `review-missing.txt` with the reason there is none.
-- For an issue: the agent's `REPRO.md`, `PR.md`, the task and the logs as a run artifact; a PR with `Closes #n` when the
-  issue is on the fork, or `Issue: <url>` when it is elsewhere.
+- For an issue: `docs/evidence/issue-<n>-<time>-run<id>/` on `evidence/<owner>-<repo>-issue-<n>` (append-only) with
+  `VERDICT.md`, `verdict.json`, `outcome.json`, `triage.json`, the agent's `REPRO.md` and `COMMENT.md`, the live
+  reproduction log and the run log (redacted copies), and the PR's test verdict when there was one; the same as a run
+  artifact; a PR with `Closes #n` when the issue is on the fork, or `Issue: <url>` when it is elsewhere.
+  `scripts/evidence-page.py` lists issue branches in their own table.
 
 ## Setting it up on another lab
 
@@ -117,6 +124,9 @@ scripts/pairtest run --lab lab.run.yaml --target pr --compare base --suite smoke
     --opt "repro_cmd=bash tests/repro-issue-12.sh {api} {model}"      # the repro suite, when the PR fixes an issue
 scripts/evidence-review.sh runs/<run> --checkout . --base <base sha> --head <head sha> --pr-url <url>   # the second opinion
 LIVE_API=http://head:8888/v1 LIVE_MODEL=<model> scripts/issue-agent.sh https://github.com/<owner>/<repo>/issues/12 --repo <fork>
+scripts/issue-verdict.py ~/.cache/inference-agent-kit/issues/<owner>-<repo>-12 [--test-verdict runs/<run>/verdict.json]
+scripts/issue-sweep.sh <owner>/<repo> --fork <fork>              # every open issue against the fork's issue evidence; --dispatch runs the missing ones
 ```
 
-`tests/selftest.sh` covers the repro suite and `issue-agent.sh` with a fake agent and a fake `gh`, no hardware needed.
+`tests/selftest.sh` covers the repro suite, `issue-agent.sh` (triage, reproduction with and without a fix, posting),
+`issue-verdict.py` and `issue-sweep.sh` with a fake agent and a fake `gh`, no hardware needed.

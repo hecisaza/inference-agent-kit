@@ -1,10 +1,15 @@
 #!/usr/bin/env bash
 # fake-gh: stands in for gh in the self-test. Records every call in FAKE_GH_LOG and answers the few commands
-# issue-agent.sh uses with canned output; nothing reaches GitHub.
+# issue-agent.sh and issue-sweep.sh use with canned output; nothing reaches GitHub.
 echo "gh $*" >> "${FAKE_GH_LOG:?set FAKE_GH_LOG}"
 case "${1:-} ${2:-}" in
   "issue view") echo '{"title":"17*23 is answered wrongly","body":"The server replies 392 to 17*23.","comments":[{"author":{"login":"someone"},"body":"Same here."}],"author":{"login":"tester"},"url":"https://github.com/o/r/issues/7"}';;
+  "issue list") echo '[{"number":7,"title":"17*23 is answered wrongly","createdAt":"2026-01-01T00:00:00Z","author":{"login":"tester"},"url":"https://github.com/o/r/issues/7"},{"number":8,"title":"idea: more","createdAt":"2026-01-02T00:00:00Z","author":{"login":"tester"},"url":"https://github.com/o/r/issues/8"}]';;
   "pr create") echo "https://github.com/o/r/pull/99";;
   "issue comment") ;;
+  "api repos/o/f/branches"*|"api repos/o/f/branches?per_page=100") echo '[{"name":"main"},{"name":"evidence/o-r-issue-8"}]';;
+  "api repos/o/f/contents/docs/evidence?ref=evidence/o-r-issue-8") echo '[{"name":"issue-8-20260101T000000","type":"dir"}]';;
+  "api repos/o/f/contents/docs/evidence/issue-8-20260101T000000/verdict.json?ref=evidence/o-r-issue-8") echo '{"class":"OUT OF SCOPE","label":"issue:out-of-scope","reasons":["triage: feature"]}';;
+  "workflow run") ;;
   *) ;;
 esac

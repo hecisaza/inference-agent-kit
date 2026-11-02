@@ -275,6 +275,42 @@ r=$(LIVE_API=http://127.0.0.1:18611/v1 iarun https://github.com/o/r/issues/7); r
 : > "$ia/gh.log"
 r=$(FAKE_AGENT_VERDICT=not-reproduced LIVE_API=http://127.0.0.1:18612/v1 iarun https://github.com/up/stream/issues/3); rc=$?
 [ "$rc" = 0 ] && grep -q "RESULT: not-reproduced (draft comment at" <<<"$r" && ! grep -q "issue comment\|pr create" "$ia/gh.log" && [ -s "$ia/work/up-stream-3/COMMENT.md" ] && ok "issue-agent: not reproduced on an upstream issue -> draft comment only, nothing posted" || bad "issue-agent upstream: rc=$rc $(tail -3 <<<"$r")"
+# triage: lab and feature issues never reach the reproducer; a triage-only run stops after the triage; --no-post keeps the comment as a draft
+: > "$ia/gh.log"
+r=$(FAKE_TRIAGE_KIND=lab LIVE_API=http://127.0.0.1:18612/v1 iarun https://github.com/o/r/issues/7); rc=$?
+[ "$rc" = 0 ] && grep -q "RESULT: needs-lab (comment posted" <<<"$r" && grep -q "issue comment" "$ia/gh.log" && ! grep -q "pr create" "$ia/gh.log" && [ ! -f "$ia/work/o-r-7/REPRO.md" ] && python3 -c "import json; o=json.load(open('$ia/work/o-r-7/outcome.json')); assert o['result']=='needs-lab' and o['triage']['kind']=='lab' and o['agent_verdict'] is None" && ok "issue-agent: triage lab -> needs-lab, comment posted, the reproducer never ran" || bad "issue-agent triage lab: rc=$rc $(tail -3 <<<"$r")"
+: > "$ia/gh.log"
+r=$(FAKE_TRIAGE_KIND=feature LIVE_API=http://127.0.0.1:18612/v1 iarun https://github.com/o/r/issues/7 --no-post); rc=$?
+[ "$rc" = 0 ] && grep -q "RESULT: out-of-scope (draft comment at" <<<"$r" && ! grep -q "issue comment\|pr create" "$ia/gh.log" && grep -q "address\]" "$ia/work/o-r-7/public/log.txt" && ok "issue-agent: triage feature -> out-of-scope; --no-post leaves a draft; public copies are redacted" || bad "issue-agent triage feature: rc=$rc $(tail -3 <<<"$r")"
+: > "$ia/gh.log"
+r=$(LIVE_API=http://127.0.0.1:18612/v1 iarun https://github.com/o/r/issues/7 --triage-only); rc=$?
+[ "$rc" = 0 ] && grep -q "RESULT: triaged (api" <<<"$r" && ! grep -q "issue comment\|pr create" "$ia/gh.log" && [ ! -f "$ia/work/o-r-7/REPRO.md" ] && ok "issue-agent: --triage-only stops after an api triage" || bad "issue-agent triage-only: rc=$rc $(tail -3 <<<"$r")"
+# reproduced without a fix: confirmed on live -> reproduced (no PR); not confirmed -> unclear
+: > "$ia/gh.log"
+r=$(FAKE_AGENT_NOFIX=1 LIVE_API=http://127.0.0.1:18612/v1 iarun https://github.com/o/r/issues/7 --no-post); rc=$?
+[ "$rc" = 0 ] && grep -q "RESULT: reproduced (draft comment at" <<<"$r" && ! grep -q "pr create" "$ia/gh.log" && python3 -c "import json; o=json.load(open('$ia/work/o-r-7/outcome.json')); assert o['result']=='reproduced' and o['live_repro_exit']==1 and o['fix_commits']==0 and o['pr_url'] is None" && ok "issue-agent: reproduced without a fix -> confirmed on live, no PR, outcome recorded" || bad "issue-agent no-fix: rc=$rc $(tail -3 <<<"$r")"
+r=$(FAKE_AGENT_NOFIX=1 LIVE_API=http://127.0.0.1:18611/v1 iarun https://github.com/o/r/issues/7 --no-post); rc=$?
+[ "$rc" = 0 ] && grep -q "RESULT: unclear (draft comment at" <<<"$r" && ok "issue-agent: reproduced without a fix, not confirmed on live -> unclear" || bad "issue-agent no-fix unclear: rc=$rc $(tail -3 <<<"$r")"
+# the issue verdict from the outcomes
+iv=$(mktemp -d)
+python3 scripts/issue-verdict.py "$ia/work/o-r-7" --out "$iv/a" > "$iv/o" 2>&1 && grep -q "Issue outcome: UNCLEAR" "$iv/o" && ok "issue-verdict: unclear outcome -> UNCLEAR" || bad "issue-verdict unclear: $(cat "$iv/o")"
+mkdir -p "$iv/b" "$iv/c" "$iv/d"
+printf '{"issue_url":"https://github.com/o/r/issues/7","result":"pr","pr_url":"https://github.com/o/r/pull/99","branch":"agent/issue-7","fix_commits":1,"agent_verdict":"reproduced","live_repro_exit":1,"triage":{"kind":"api","why":"w","repro":"r","confidence":"high"}}' > "$iv/b/outcome.json"
+printf '{"class":"READY","label":"evidence:ready","reasons":["repro script fails on the base and passes on the candidate; CLAIM TEST: SOUND"],"facts":[]}' > "$iv/b/tv.json"
+python3 scripts/issue-verdict.py "$iv/b" --test-verdict "$iv/b/tv.json" > "$iv/o" 2>&1 && grep -q "Issue outcome: FIXED" "$iv/o" && grep -q '"label": "issue:fixed"' "$iv/b/verdict.json" && ok "issue-verdict: PR opened + test READY -> FIXED" || bad "issue-verdict fixed: $(cat "$iv/o")"
+python3 scripts/issue-verdict.py "$iv/b" --test-class "NOT READY" --out "$iv/c" > "$iv/o" 2>&1 && grep -q "Issue outcome: FIX FAILS" "$iv/o" && ok "issue-verdict: PR opened + test NOT READY -> FIX FAILS" || bad "issue-verdict fix fails: $(cat "$iv/o")"
+python3 scripts/issue-verdict.py "$iv/b" --out "$iv/d" > "$iv/o" 2>&1 && grep -q "Issue outcome: FIX PROPOSED" "$iv/o" && ok "issue-verdict: PR opened, no test verdict yet -> FIX PROPOSED" || bad "issue-verdict proposed: $(cat "$iv/o")"
+printf '{"issue_url":"u","result":"needs-lab","triage":{"kind":"lab","why":"needs KV_SHARD=1","repro":"start with KV_SHARD=1","confidence":"medium"}}' > "$iv/d/outcome.json"
+python3 scripts/issue-verdict.py "$iv/d" > "$iv/o" 2>&1 && grep -q "Issue outcome: NEEDS THE LAB" "$iv/o" && grep -q "KV_SHARD=1" "$iv/d/VERDICT.md" && ok "issue-verdict: triage lab -> NEEDS THE LAB with the condition" || bad "issue-verdict needs-lab: $(cat "$iv/o")"
+printf '{"issue_url":"u","result":"not-reproduced","agent_verdict":"not-reproduced","triage":{"kind":"api","why":"w","repro":"r","confidence":"low"}}' > "$iv/d/outcome.json"
+python3 scripts/issue-verdict.py "$iv/d" > "$iv/o" 2>&1 && grep -q "Issue outcome: NOT REPRODUCIBLE HERE" "$iv/o" && ok "issue-verdict: not reproduced -> NOT REPRODUCIBLE HERE" || bad "issue-verdict not-repro: $(cat "$iv/o")"
+# the sweep: the fake fork holds evidence for #8 only; #7 would be dispatched
+: > "$ia/gh.log"
+r=$(FAKE_GH_LOG="$ia/gh.log" PATH="$ia/bin:$PATH" bash scripts/issue-sweep.sh o/r --fork o/f 2>&1); rc=$?
+[ "$rc" = 0 ] && grep -q "#7 .*no run" <<<"$r" && grep -q "#8 .*OUT OF SCOPE" <<<"$r" && grep -q "1 issue(s) would be dispatched" <<<"$r" && ! grep -q "workflow run" "$ia/gh.log" && ok "issue-sweep: outcomes from the evidence branches, dispatch list without --dispatch" || bad "issue-sweep: rc=$rc $r"
+r=$(FAKE_GH_LOG="$ia/gh.log" PATH="$ia/bin:$PATH" bash scripts/issue-sweep.sh o/r --fork o/f --dispatch --mode triage 2>&1); rc=$?
+[ "$rc" = 0 ] && grep -q "workflow run spark-issue.yml -R o/f -f issue=https://github.com/o/r/issues/7 -f mode=triage" "$ia/gh.log" && ! grep -q "issues/8 " "$ia/gh.log" && ok "issue-sweep --dispatch: one dispatch per issue without a run" || bad "issue-sweep dispatch: rc=$rc $r"
+rm -rf "$iv"
 kill "$badpid" 2>/dev/null; rm -rf "$ia"
 # --dry: no command runs and no request is sent (no server is up for a's port after this stop)
 pkill -f "fake_server.py 18611" 2>/dev/null; sleep 0.5
