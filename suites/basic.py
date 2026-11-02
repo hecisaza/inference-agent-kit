@@ -67,7 +67,7 @@ def cutin(ctx):
     for k in range(int(ctx["opts"].get("rounds", 3))):
         out = {}
         def long():  # noqa: E306
-            r = chat(api, model, [{"role": "user", "content": words(n_words, 7000 + k)}], max_tokens=8, stream=True)  # same prompt per round on both targets; distinct rounds
+            r = chat(api, model, [{"role": "user", "content": words(n_words, 7000 + 100 * int(ctx.get("rep", 0)) + k)}], max_tokens=8, stream=True)  # same prompt per round on both targets; distinct rounds and repetitions (cold cache)
             out["long"] = r.get("ttft"); r.get("error") and errs.append(f"round {k} long: {r['error']}")
         t = threading.Thread(target=long); t.start(); time.sleep(3)
         r = chat(api, model, [{"role": "user", "content": "What is 17 times 23? Number only."}], max_tokens=8, stream=True)
@@ -117,19 +117,20 @@ def perf(ctx):
     rounds, n_words, streams = int(opts.get("perf_rounds", 3)), int(opts.get("perf_words", 12000)), int(opts.get("perf_streams", 4))
     decode, prefill, batch, errs, ptoks = [], [], [], [], None
     for k in range(rounds):
-        r = chat(api, model, [{"role": "user", "content": f"Describe a river valley through the four seasons in plain prose. Variant {k}."}], max_tokens=256, stream=True)
+        rep = int(opts.get("rep", ctx.get("rep", 0)))
+        r = chat(api, model, [{"role": "user", "content": f"Describe a river valley through the four seasons in plain prose. Variant {rep}-{k}."}], max_tokens=256, stream=True)
         if r.get("error"):
             errs.append(f"round {k} decode: {r['error']}")
         elif r.get("completion_tokens") and r.get("ttft") is not None:
             decode.append(round(r["completion_tokens"] / max(r["total"] - r["ttft"], 1e-3), 1))
-        p = chat(api, model, [{"role": "user", "content": words(n_words, 9000 + k)}], max_tokens=1, stream=True)
+        p = chat(api, model, [{"role": "user", "content": words(n_words, 9000 + 100 * rep + k)}], max_tokens=1, stream=True)   # cold on every repetition
         if p.get("error"):
             errs.append(f"round {k} prefill: {p['error']}")
         elif p.get("prompt_tokens") and p.get("ttft"):
             prefill.append(round(p["prompt_tokens"] / p["ttft"], 1)); ptoks = p["prompt_tokens"]
         out = [None] * streams
         def one(i, k=k):  # noqa: E306
-            out[i] = chat(api, model, [{"role": "user", "content": f"List twenty animals with one fact each. Set {k}-{i}."}], max_tokens=128, stream=True)
+            out[i] = chat(api, model, [{"role": "user", "content": f"List twenty animals with one fact each. Set {rep}-{k}-{i}."}], max_tokens=128, stream=True)
         ts = [threading.Thread(target=one, args=(i,)) for i in range(streams)]; t0 = time.time()
         for t in ts: t.start()
         for t in ts: t.join()

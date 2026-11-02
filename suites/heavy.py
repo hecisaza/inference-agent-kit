@@ -106,7 +106,8 @@ def concurrency(ctx):
     api, model, opts = ctx["api"], ctx["model"], ctx["opts"]
     stages = [int(x) for x in str(opts.get("conc_streams", "1,4,8,16")).split(",") if x]
     tokens, rounds = int(opts.get("conc_tokens", 128)), int(opts.get("conc_rounds", 2))
-    prompts = [[{"role": "user", "content": f"Topic {i}. " + words(300, 5000 + i) + " Write four sentences about it."}] for i in range(16)]
+    rep = int(ctx.get("rep", 0))
+    prompts = [[{"role": "user", "content": f"Topic {i}. " + words(300, 5000 + 100 * rep + i) + " Write four sentences about it."}] for i in range(16)]   # cold on every repetition
     container = ctx.get("target", {}).get("container"); hosts = ctx.get("hosts", []) if container else []
 
     def sample(label):

@@ -383,7 +383,7 @@ def cmd_run(lab, a):
                         r = {"ok": False, "skipped": "no bench_cmd"} if not cmd else {"ok": subprocess.run(cmd, shell=True).returncode == 0, "cmd": cmd}
                     else:
                         ctx = {"api": t["api"], "model": t["model"], "out": run, "opts": {**{"chunk": t.get("chunk", 2048)}, **opts}, "log": log,
-                               "role": "candidate" if name == names[0] else "control", "log_cmd": t.get("log_cmd", ""),
+                               "role": "candidate" if name == names[0] else "control", "log_cmd": t.get("log_cmd", ""), "rep": rep,
                                "target": t, "head": head, "hosts": list(lab.c["hosts"]), "ssh": lab.sh, "platform": lab.platform(head),
                                "restart": lambda t=t, name=name: sw.to(name, t), "sample": lambda t=t, h=head: {"head": lab.probe(h, t)}}
                         try:
