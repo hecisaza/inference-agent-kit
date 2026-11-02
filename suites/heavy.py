@@ -103,8 +103,8 @@ def concurrency(ctx):
     determinism: every batched reply's hash is compared with the serial reply to the same prompt. When the target names
     its container, the served container's host memory and open descriptors are sampled on every host before, after
     each round and after a 30 s drain: growth after the drain, per 1000 requests, is the leak proxy. A warm-up pass
-    (16 prompts at 4 streams, not recorded) precedes the baseline sample, so a fresh process's first-use allocations
-    are not counted as growth."""
+    over every stage (not recorded) precedes the baseline sample, so a fresh process's first-use allocations per
+    batch size are not counted as growth."""
     api, model, opts = ctx["api"], ctx["model"], ctx["opts"]
     stages = [int(x) for x in str(opts.get("conc_streams", "1,4,8,16")).split(",") if x]
     tokens, rounds = int(opts.get("conc_tokens", 128)), int(opts.get("conc_rounds", 2))
@@ -121,16 +121,20 @@ def concurrency(ctx):
         ctx["log"](f"concurrency sample {label}: " + json.dumps(out)); return out
 
     serial, results, errs, total = {}, [], [], 0
-    # a fresh process allocates during its first pass (graphs, buffers, cache): a warm-up pass (opts conc_warmup, default 1;
-    # 0 skips it) at 4 streams, not recorded, comes before the memory baseline so growth measures the steady state
+    # a fresh process allocates on the first use of EACH batch size (graphs, buffers; +300 MB over a first pass of 1-16
+    # streams on the ring, +2 MB on a warm process): a warm-up pass over every stage (opts conc_warmup, default 1 pass;
+    # 0 skips it), not recorded, comes before the memory baseline so growth measures the steady state
     for _ in range(int(opts.get("conc_warmup", 1))):
-        outs = [None] * 16
-        def warm(i):  # noqa: E306
-            outs[i] = chat(api, model, prompts[i], max_tokens=tokens, stream=True)
-        for start in range(0, 16, 4):
-            ts = [threading.Thread(target=warm, args=(i,)) for i in range(start, min(16, start + 4))]
-            [t.start() for t in ts]; [t.join() for t in ts]
-        ctx["log"](f"concurrency warm-up: {sum(1 for r in outs if r and not r.get('error'))}/16 replies")
+        got = 0
+        for n in stages:
+            outs = [None] * 16
+            def warm(i):  # noqa: E306
+                outs[i] = chat(api, model, prompts[i], max_tokens=tokens, stream=True)
+            for start in range(0, 16, n):
+                ts = [threading.Thread(target=warm, args=(i,)) for i in range(start, min(16, start + n))]
+                [t.start() for t in ts]; [t.join() for t in ts]
+            got += sum(1 for r in outs if r and not r.get("error"))
+        ctx["log"](f"concurrency warm-up over {len(stages)} stages: {got}/{16 * len(stages)} replies")
     before = sample("before") if hosts else {}
     for rnd in range(rounds):
         for n in stages:
