@@ -86,4 +86,74 @@ def fault(ctx):
     return {"ok": bool(res) and all(x.get("request_failed") and x.get("exit_ok") and x.get("reference_equal_after_restart") for x in res), "cases": res}
 
 
-SUITES = {"soak": soak, "fault": fault}
+def _mem_mb(text):
+    """'12.3GiB / 128GiB' -> 12595.2 (MB); None when unreadable."""
+    import re
+    m = re.match(r"\s*([0-9.]+)\s*([KMGT]i?B)", text or "")
+    if not m:
+        return None
+    v, u = float(m.group(1)), m.group(2)[0]
+    return round(v * {"K": 1 / 1024, "M": 1, "G": 1024, "T": 1024 * 1024}[u], 1)
+
+
+def concurrency(ctx):
+    """Sustained concurrency and resource growth. Fixed prompts at 1, 4, 8 and 16 concurrent streams (opts conc_streams,
+    default "1,4,8,16"; opts conc_tokens, default 128 tokens per reply; opts conc_rounds, default 2 rounds of all
+    stages). Records per stage: aggregate tokens/s, first-token latency median and p95, errors. Serial-vs-batched
+    determinism: every batched reply's hash is compared with the serial reply to the same prompt. When the target names
+    its container, the served container's host memory and open descriptors are sampled on every host before, after
+    each round and after a 30 s drain: growth after the drain, per 1000 requests, is the leak proxy."""
+    api, model, opts = ctx["api"], ctx["model"], ctx["opts"]
+    stages = [int(x) for x in str(opts.get("conc_streams", "1,4,8,16")).split(",") if x]
+    tokens, rounds = int(opts.get("conc_tokens", 128)), int(opts.get("conc_rounds", 2))
+    prompts = [[{"role": "user", "content": f"Topic {i}. " + words(300, 5000 + i) + " Write four sentences about it."}] for i in range(16)]
+    container = ctx.get("target", {}).get("container"); hosts = ctx.get("hosts", []) if container else []
+
+    def sample(label):
+        out = {}
+        for h in hosts:
+            mem = _mem_mb(ctx["ssh"](h, f"docker stats --no-stream --format '{{{{.MemUsage}}}}' {container} 2>/dev/null"))
+            fds = ctx["ssh"](h, f"docker exec {container} sh -c 'for p in /proc/[0-9]*; do ls $p/fd 2>/dev/null; done | wc -l' 2>/dev/null").strip()
+            out[h] = {"mem_mb": mem, "fds": int(fds) if fds.isdigit() else None}
+        ctx["log"](f"concurrency sample {label}: " + json.dumps(out)); return out
+
+    serial, results, errs, total = {}, [], [], 0
+    before = sample("before") if hosts else {}
+    for rnd in range(rounds):
+        for n in stages:
+            lat, toks, outs = [], 0, [None] * 16
+            def one(i, n=n):  # noqa: E306
+                outs[i] = chat(api, model, prompts[i], max_tokens=tokens, stream=True)
+            t0 = time.time()
+            for start in range(0, 16, n):   # 16 requests per stage, n at a time
+                ts = [threading.Thread(target=one, args=(i,)) for i in range(start, min(16, start + n))]
+                [t.start() for t in ts]; [t.join() for t in ts]
+            el = time.time() - t0
+            for i, r in enumerate(outs):
+                if r is None or r.get("error"):
+                    errs.append(f"round {rnd} streams {n} prompt {i}: {(r or {}).get('error', 'no reply')}"); continue
+                toks += r.get("completion_tokens") or 0; total += 1
+                if r.get("ttft") is not None: lat.append(r["ttft"])
+                if n == 1 and rnd == 0: serial[i] = r.get("sha")
+            lat.sort()
+            results.append({"round": rnd, "streams": n, "aggregate_tps": round(toks / max(el, 1e-3), 1), "ttft_p50": lat[len(lat) // 2] if lat else None,
+                            "ttft_p95": lat[min(len(lat) - 1, int(len(lat) * 0.95))] if lat else None, "requests": sum(1 for r in outs if r and not r.get("error")),
+                            "batched_vs_serial": None if n == 1 else {"compared": sum(1 for i, r in enumerate(outs) if r and r.get("sha") and i in serial),
+                                                                       "mismatch": sum(1 for i, r in enumerate(outs) if r and r.get("sha") and i in serial and r["sha"] != serial[i])}})
+            ctx["log"](f"concurrency round {rnd} streams {n}: {results[-1]}")
+        if hosts: sample(f"after round {rnd}")
+    after = {}
+    if hosts:
+        time.sleep(30); after = sample("after drain")
+    memory = {}
+    for h in hosts:
+        b, a = before.get(h, {}), after.get(h, {})
+        if b.get("mem_mb") is not None and a.get("mem_mb") is not None:
+            memory[h] = {"before_mb": b["mem_mb"], "after_drain_mb": a["mem_mb"], "growth_mb": round(a["mem_mb"] - b["mem_mb"], 1),
+                         "growth_mb_per_1000_requests": round((a["mem_mb"] - b["mem_mb"]) / max(total, 1) * 1000, 1), "fds_before": b.get("fds"), "fds_after": a.get("fds")}
+    mism = sum((r["batched_vs_serial"] or {}).get("mismatch", 0) for r in results)
+    return {"ok": not errs and mism == 0, "stages": results, "determinism": {"compared": sum((r["batched_vs_serial"] or {}).get("compared", 0) for r in results), "mismatch": mism},
+            "memory": memory, "requests": total, "errors": errs[:10]}
+
+
+SUITES = {"soak": soak, "fault": fault, "concurrency": concurrency}

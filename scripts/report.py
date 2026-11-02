@@ -12,12 +12,13 @@ reply. The "what this run does not show" section lists the suites that did not r
 complete."""
 import argparse, html, json, os, re, statistics
 
-ALL_SUITES = ("smoke", "boundary", "cutin", "perf", "startup", "soak", "fault", "repro", "bench")
+ALL_SUITES = ("smoke", "boundary", "cutin", "perf", "startup", "soak", "concurrency", "fault", "repro", "bench")
 NOT_SHOWN = {"smoke": "basic answers, greedy repeat equality, streaming and JSON mode", "boundary": "reply equality at chunk ends and prefix-cache cases",
              "cutin": "a short request's first-token time behind a cold long prompt", "soak": "errors, canary mismatches and resource growth over time with client aborts",
              "fault": "a clean pair exit and recovery after an injected read fault", "bench": "an external benchmark against a control (The Grill or similar)",
              "repro": "whether the issue's reproduction command shows the problem on the control and not on the candidate",
-             "perf": "decode, prefill and aggregate throughput against the control", "startup": "seconds from the switch to the API answering"}
+             "perf": "decode, prefill and aggregate throughput against the control", "startup": "seconds from the switch to the API answering",
+             "concurrency": "throughput and first-token latency at 1 to 16 streams, serial-vs-batched determinism, host memory and descriptors after a drain"}
 HASH = re.compile(r"^[0-9a-f]{12}$")
 
 
@@ -156,6 +157,20 @@ def main():
                         md.append(f"  machine samples, first and last: `{cell(json.dumps(r['samples'][0])[:160])}` → `{cell(json.dumps(r['samples'][-1])[:160])}`")
             charts["soak.svg"] = bar_svg(bars, unit="", title="Soak: request outcomes")
             md.append("\n![soak](soak.svg)")
+        elif s == "concurrency":
+            md.append("| target | rep | streams | aggregate tok/s | first token p50 / p95 | batched replies ≠ serial | errors |\n|---|---|---|---|---|---|---|")
+            for n in names:
+                for i, r in enumerate(R[s].get(n, [])):
+                    for st in r.get("stages", []):
+                        d = st.get("batched_vs_serial"); dm = "—" if not d else f"{d['mismatch']} of {d['compared']}"
+                        md.append(f"| `{cell(n)}` | {i} | {st['streams']} (round {st['round']}) | **{st['aggregate_tps']}** | {st.get('ttft_p50')} / {st.get('ttft_p95')} s | {dm} | {len(r.get('errors') or []) if st['streams'] == 16 else ''} |")
+            for n in names:
+                for i, r in enumerate(R[s].get(n, [])):
+                    det = r.get("determinism", {})
+                    md.append(f"\n`{cell(n)}` rep {i}: {r.get('requests')} requests; batched replies identical to serial in {det.get('compared', 0) - det.get('mismatch', 0)} of {det.get('compared', 0)} comparisons" + (f"; errors: {cell(r['errors'][:3])}" if r.get("errors") else ""))
+                    for h, m in (r.get("memory") or {}).items():
+                        md.append(f"- host `{cell(h)}`: container memory {m['before_mb']} → {m['after_drain_mb']} MB after the drain (**{m['growth_mb']:+} MB**, {m['growth_mb_per_1000_requests']:+} MB per 1000 requests); descriptors {m.get('fds_before')} → {m.get('fds_after')}")
+            md.append("")
         elif s == "fault":
             md.append("| target | case | request failed | head exit | seconds to exit | other ranks | reference equal after restart |\n|---|---|---|---|---|---|---|")
             for n in names:

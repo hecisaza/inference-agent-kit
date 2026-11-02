@@ -105,6 +105,10 @@ rm -rf "$vd"
 r=$(python3 scripts/pairtest run --lab tests/lab-fake.yaml --target a --compare b --suite perf --opt perf_rounds=1 --opt perf_words=40 --opt perf_streams=2 --runs /tmp/selftest-runs 2>&1); rc=$?
 rep=$(ls -dt /tmp/selftest-runs/2*/ 2>/dev/null | head -1)
 [ "$rc" = 0 ] && grep -q "decode tok/s" "$rep/report.md" && [ -s "$rep/perf-decode.svg" ] && ok "perf suite: decode, prefill and aggregate measured on both targets, charts written" || bad "perf suite: rc=$rc $(echo "$r" | tail -3)"
+# concurrency suite against the fake servers: stages run, batched replies match serial (the fake is deterministic), no container -> no memory samples
+r=$(python3 scripts/pairtest run --lab tests/lab-fake.yaml --target a --compare b --suite concurrency --opt conc_rounds=1 --opt conc_tokens=8 --opt conc_streams=1,4 --runs /tmp/selftest-runs 2>&1); rc=$?
+rep=$(ls -dt /tmp/selftest-runs/2*/ 2>/dev/null | head -1)
+[ "$rc" = 0 ] && grep -q "batched replies identical to serial in 16 of 16" "$rep/report.md" && grep -q "aggregate tok/s" "$rep/report.md" && ok "concurrency suite: 1 and 4 streams, batched replies identical to serial, report section written" || bad "concurrency suite: rc=$rc $(echo "$r" | tail -3) $(grep -c serial "$rep/report.md" 2>/dev/null)"
 # verdict.py on performance: a candidate 10 % slower -> NOT READY (slower); 10 % faster with everything green -> READY (faster)
 pv=$(mktemp -d); python3 - "$rep" "$pv" <<'PY'
 import json, os, sys

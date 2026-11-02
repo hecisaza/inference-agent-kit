@@ -30,11 +30,12 @@ import argparse, datetime, json, os, re, statistics
 HASH = re.compile(r"^[0-9a-f]{12}$")
 LABEL = {"READY": "ready", "SAFE, UNVERIFIED": "unverified", "NOT READY": "blocked", "RERUN": "rerun"}
 REVIEW_VERDICTS = ["EVIDENCE UNRELIABLE", "EVIDENCE CONTRADICTS THE CLAIM", "EVIDENCE SUPPORTS THE CLAIM", "NO REGRESSION SHOWN, CLAIM NOT TESTED"]
-FLOOR = {"decode": 0.03, "prefill": 0.03, "aggregate": 0.05, "cut-in": 0.03, "startup": 0.10}   # used only without a calibration
+FLOOR = {"decode": 0.03, "prefill": 0.03, "aggregate": 0.05, "cut-in": 0.03, "startup": 0.10, "aggregate@16": 0.05}   # used only without a calibration
 ABS_FLOOR = {"cut-in": 0.2, "startup": 10.0}   # seconds: a latency difference smaller than this is never called, whatever the ratio
 PERF = [("decode", "perf", lambda r: r.get("decode_tps") or [], 1), ("prefill", "perf", lambda r: r.get("prefill_tps") or [], 1),
         ("aggregate", "perf", lambda r: r.get("batch_tps") or [], 1), ("cut-in", "cutin", lambda r: [x.get("short") for x in r.get("rounds", [])], -1),
-        ("startup", "startup", lambda r: r.get("seconds_per_start") or [], -1)]
+        ("startup", "startup", lambda r: r.get("seconds_per_start") or [], -1),
+        ("aggregate@16", "concurrency", lambda r: [st["aggregate_tps"] for st in r.get("stages", []) if st.get("streams") == 16], 1)]
 
 
 def last_mention(text, options):
@@ -190,6 +191,18 @@ def main():
             elif x.get("tiny") and abs(x["delta"]) > x["band"]: n += f", {abs(x['candidate'] - x['control']):.2f} s apart, below the {ABS_FLOOR[x['metric']]:g} s floor: not called"
             return n + ")"
         facts.append(f"performance against the control ({band_note}): " + " · ".join(perf_note(x) for x in perf))
+    # sustained concurrency: batched replies must match serial ones; host memory after a drain must not grow more than on the control
+    conc_block = []
+    if "concurrency" in R and cand in R["concurrency"]:
+        def det(t): return sum((r.get("determinism") or {}).get("mismatch", 0) for r in R["concurrency"].get(t, []))  # noqa: E306
+        def growth(t): return max([m.get("growth_mb", 0) for r in R["concurrency"].get(t, []) for m in (r.get("memory") or {}).values()] or [0])  # noqa: E306
+        mc, mk = det(cand), det(ctrl) if ctrl else 0
+        gc, gk = growth(cand), growth(ctrl) if ctrl else 0
+        facts.append(f"concurrency: batched-vs-serial mismatches candidate {mc}, control {mk}; largest host memory growth after a drain candidate {gc:+} MB, control {gk:+} MB")
+        if mc and not mk:
+            conc_block.append(f"batched replies differ from serial replies on the candidate ({mc}) and not on the control")
+        if gc - gk > 512:
+            conc_block.append(f"host memory grows on the candidate after a drain ({gc:+} MB) beyond the control ({gk:+} MB)")
     adm_c, adm_k = admission(R, cand, ctrl)
     if adm_c is not None:
         facts.append("cut-in admission (short request answered before the long prompt's first token): " + f"candidate {'yes' if adm_c else 'no'}, control {'yes' if adm_k else 'no'}")
@@ -236,6 +249,7 @@ def main():
         blockers.append("slower than the control over counterbalanced repetitions: " + ", ".join(f"{x['metric']} {x['delta']:+.0%} (band ±{x['band']:.0%})" for x in slow))
     if adm_c is not None and adm_k and not adm_c:
         blockers.append("cut-in admission regressed: the control admits the short request during the long prefill, the candidate does not")
+    blockers.extend(conc_block)
     if rv == "EVIDENCE CONTRADICTS THE CLAIM":
         blockers.append("the second opinion contradicts the claim")
     if not identical and rv != "EVIDENCE SUPPORTS THE CLAIM":
