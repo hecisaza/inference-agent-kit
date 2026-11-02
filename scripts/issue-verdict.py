@@ -42,7 +42,7 @@ def main():
             tv = {}
     tcls = tv.get("class") or (a.test_class or "").strip() or None
     if tri:
-        facts.append(f"triage: {tri.get('kind', '?')} ({tri.get('confidence', '?')} confidence): {tri.get('why', '')}".rstrip(": "))
+        facts.append(f"triage: {tri.get('kind', '?')} ({tri.get('confidence', '?')} confidence)" + ("" if res in ("needs-lab", "out-of-scope", "triaged") else f": {tri.get('why', '')}".rstrip(": ")))
         if tri.get("repro"):
             facts.append(f"triage, what shows it: {tri['repro']}")
         if tri.get("patches"):
