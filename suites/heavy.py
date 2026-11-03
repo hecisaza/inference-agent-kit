@@ -278,10 +278,20 @@ def endurance(ctx):
         return round((b[key] - a[key]) / a[key] * 100, 1) if a.get(key) and b.get(key) else None
     worst = min((p for p in probes if p.get("decode_tps")), key=lambda p: p["decode_tps"], default=None)
     memory = {}
+    # a fresh process allocates most of its working set in the first interval; the steady state is what follows it, and
+    # the late slope (the second half of the run, per hour) is what would add up over days
+    second = probes[1] if len(probes) > 2 else first
+    half = probes[len(probes) // 2] if len(probes) > 2 else first
     for h in hosts:
         a, b = (first.get("memory") or {}).get(h, {}), (last.get("memory") or {}).get(h, {})
+        a2, ah = (second.get("memory") or {}).get(h, {}), (half.get("memory") or {}).get(h, {})
         if a.get("mem_mb") is not None and b.get("mem_mb") is not None:
             memory[h] = {"first_mb": a["mem_mb"], "last_mb": b["mem_mb"], "growth_mb": round(b["mem_mb"] - a["mem_mb"], 1), "fds_first": a.get("fds"), "fds_last": b.get("fds")}
+            if a2.get("mem_mb") is not None:
+                memory[h]["growth_after_first_interval_mb"] = round(b["mem_mb"] - a2["mem_mb"], 1)
+            hours = (last["minute"] - half["minute"]) / 60
+            if ah.get("mem_mb") is not None and hours > 0:
+                memory[h]["late_slope_mb_per_hour"] = round((b["mem_mb"] - ah["mem_mb"]) / hours, 1)
     canary_bad = sum(1 for p in probes if p.get("canary_sha") and first.get("canary_sha") and p["canary_sha"] != first["canary_sha"])
     probe_errs = [e for p in probes for e in p.get("errors", [])]
     return {"ok": not probe_errs and canary_bad == 0 and st["err"] == 0, "minutes": round((time.time() - t0) / 60, 1), "probes": probes,

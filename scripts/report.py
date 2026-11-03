@@ -186,7 +186,8 @@ def main():
                     d = r.get("drift") or {}
                     md.append(f"\n`{cell(n)}` rep {i}: {r.get('minutes')} min under load ({json.dumps(r.get('load'))}); drift of the last probe against the first: decode {d.get('decode_pct'):+}% · prefill {d.get('prefill_pct'):+}% · aggregate {d.get('aggregate_pct'):+}%; worst decode probe {d.get('worst_decode_pct'):+}% at minute {d.get('worst_at_minute')}; canary mismatches {r.get('canary_bad', 0)}" if d.get("decode_pct") is not None else f"\n`{cell(n)}` rep {i}: {r.get('minutes')} min; no drift computed (a probe failed)")
                     for h, m in (r.get("memory") or {}).items():
-                        md.append(f"- host `{cell(h)}`: container memory {m['first_mb']} → {m['last_mb']} MB over the run (**{m['growth_mb']:+} MB**); descriptors {m.get('fds_first')} → {m.get('fds_last')}")
+                        extra = (f"; after the first interval {m['growth_after_first_interval_mb']:+} MB" if "growth_after_first_interval_mb" in m else "") + (f"; second half **{m['late_slope_mb_per_hour']:+} MB per hour**" if "late_slope_mb_per_hour" in m else "")
+                        md.append(f"- host `{cell(h)}`: container memory {m['first_mb']} → {m['last_mb']} MB over the run (**{m['growth_mb']:+} MB**{extra}); descriptors {m.get('fds_first')} → {m.get('fds_last')}")
                     for p in r.get("probes", []):
                         if p.get("decode_tps"): bars.append((f"{n} rep {i} min {p['minute']}", p["decode_tps"], n == cand))
             if bars:

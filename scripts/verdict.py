@@ -196,10 +196,11 @@ def main():
     if "endurance" in R and cand in R["endurance"] and ctrl in R["endurance"]:
         def drift(t, key): return min([(r.get("drift") or {}).get(key) for r in R["endurance"].get(t, []) if (r.get("drift") or {}).get(key) is not None] or [0.0])  # noqa: E306
         def growth(t): return max([m.get("growth_mb", 0) for r in R["endurance"].get(t, []) for m in (r.get("memory") or {}).values()] or [0])  # noqa: E306
+        def slope(t): return max([m.get("late_slope_mb_per_hour", 0) for r in R["endurance"].get(t, []) for m in (r.get("memory") or {}).values()] or [0])  # noqa: E306
         def canary(t): return sum(r.get("canary_bad", 0) for r in R["endurance"].get(t, []))  # noqa: E306
         wc, wk, gc, gk = drift(cand, "worst_decode_pct"), drift(ctrl, "worst_decode_pct"), growth(cand), growth(ctrl)
         mins = max([r.get("minutes", 0) for r in R["endurance"].get(cand, [])] or [0])
-        facts.append(f"endurance ({mins} min under load): worst decode probe against the first, candidate {wc:+}% / control {wk:+}%; memory growth over the run candidate {gc:+} MB / control {gk:+} MB; canary mismatches candidate {canary(cand)}, control {canary(ctrl)}")
+        facts.append(f"endurance ({mins} min under load): worst decode probe against the first, candidate {wc:+}% / control {wk:+}%; memory growth over the run candidate {gc:+} MB / control {gk:+} MB, second-half slope candidate {slope(cand):+} / control {slope(ctrl):+} MB per hour; canary mismatches candidate {canary(cand)}, control {canary(ctrl)}")
         if wc < wk - 10:
             blockers.append(f"throughput drifts down over time on the candidate (worst decode probe {wc:+}% against the first, control {wk:+}%)")
         if gc > gk + 512:
