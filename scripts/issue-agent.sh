@@ -181,8 +181,16 @@ if [ "$VERDICT" = reproduced ] && [ "$NOFIX" = 0 ]; then
     echo "Reproduction script: \`$SCRIPT\` (exits non-zero while the problem shows). The test pipeline runs it against the base and against this branch."
     if [ "$ISSUE_REPO" = "$REPO" ]; then echo; echo "Closes #$N"; else echo; echo "Issue: $ISSUE_URL"; fi
   } > body.md
-  git -C repo push -q -u origin "$BRANCH"
-  PR_URL=$(gh pr create -R "$REPO" --head "$BRANCH" --title "$TITLE" --body-file body.md --label "$PR_LABEL")
+  # the branch is the agent's own: a rerun of the same issue replaces the previous attempt's branch
+  set +e
+  perr=$(git -C repo push -q -f -u origin "$BRANCH" 2>&1); prc=$?
+  if [ "$prc" != 0 ]; then set -e; finish failed "the fix is committed but the branch could not be pushed: ${perr:0:200}"; exit 2; fi
+  PR_URL=$(gh pr create -R "$REPO" --head "$BRANCH" --title "$TITLE" --body-file body.md --label "$PR_LABEL" 2>&1); crc=$?
+  set -e
+  if [ "$crc" != 0 ]; then
+    # (the usual cause: the repository does not allow Actions to create pull requests; a person opens it from the branch)
+    ERR=$PR_URL; PR_URL=""; finish failed "the fix is on branch $BRANCH, but the pull request could not be opened: ${ERR:0:200}"; exit 2
+  fi
   finish pr "$PR_URL"; exit 0
 fi
 

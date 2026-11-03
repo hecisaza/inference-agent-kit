@@ -25,7 +25,8 @@ agent on this project, and it applies here.
    The pipeline runs it against the base and against your fix. Commit it together with the fix.
 3. When reproduced: the fix, committed on this branch in small commits with plain messages, following the repository's own
    conventions (an engine change is a new numbered patch under `zig/patches/`, listed in the README's patch table; a
-   script change is the script). Run the repository's own checks if it has any, and your repro script against a local
+   script change is the script). Take the patch number from `{{KIT}}/scripts/sync.sh {{REPO}}`: its "next free counting
+   open PRs" line, so the number collides with no open pull request upstream or here. Run the repository's own checks if it has any, and your repro script against a local
    build when one can be made without the lab. Say in `REPRO.md` what you could not run.
 4. When reproduced: `PR.md` — first line the pull request title; then the body in the shape of
    `{{KIT}}/templates/PR.md` (claim, change, evidence with the reproduction output before and after, what is not shown).

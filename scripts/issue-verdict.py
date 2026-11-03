@@ -77,6 +77,8 @@ def main():
         cls = "OUT OF SCOPE"; reasons.append("triage: " + (tri.get("kind", "") + ": " + tri.get("why", "")).strip(": "))
     elif res == "triaged":
         cls = "TRIAGED"; reasons.append("triage only: " + (tri.get("kind", "?") + ": " + tri.get("why", "")).strip(": "))
+    elif res == "failed" and o.get("agent_verdict") == "reproduced" and o.get("live_repro_exit") == 1:
+        cls = "REPRODUCED"; reasons.append("the problem shows on the live build (the agent's script confirmed it); " + (f"a fix is committed on branch {o.get('branch')} but " if o.get("fix_commits") else "") + (o.get("detail") or "the run did not finish"))
     else:
         cls = "UNCLEAR"; reasons.append({"unclear": "the agent reported a reproduction that its own script does not confirm on the live build",
                                         "failed": "the agent left nothing usable: " + (o.get("detail") or "")}.get(res, f"result {res}"))
