@@ -12,13 +12,14 @@ reply. The "what this run does not show" section lists the suites that did not r
 complete."""
 import argparse, html, json, os, re, statistics
 
-ALL_SUITES = ("smoke", "boundary", "cutin", "perf", "startup", "soak", "concurrency", "fault", "repro", "bench")
+ALL_SUITES = ("smoke", "boundary", "cutin", "perf", "startup", "soak", "concurrency", "endurance", "fault", "repro", "bench")
 NOT_SHOWN = {"smoke": "basic answers, greedy repeat equality, streaming and JSON mode", "boundary": "reply equality at chunk ends and prefix-cache cases",
              "cutin": "a short request's first-token time behind a cold long prompt", "soak": "errors, canary mismatches and resource growth over time with client aborts",
              "fault": "a clean pair exit and recovery after an injected read fault", "bench": "an external benchmark against a control (The Grill or similar)",
              "repro": "whether the issue's reproduction command shows the problem on the control and not on the candidate",
              "perf": "decode, prefill and aggregate throughput against the control", "startup": "seconds from the switch to the API answering",
-             "concurrency": "throughput and first-token latency at 1 to 16 streams, serial-vs-batched determinism, host memory and descriptors after a drain"}
+             "concurrency": "throughput and first-token latency at 1 to 16 streams, serial-vs-batched determinism, host memory and descriptors after a drain",
+             "endurance": "one process under mixed load for hours: throughput probes every few minutes, a canary reply, host memory and descriptors over the run"}
 HASH = re.compile(r"^[0-9a-f]{12}$")
 
 
@@ -170,6 +171,27 @@ def main():
                     md.append(f"\n`{cell(n)}` rep {i}: {r.get('requests')} requests; batched replies identical to serial in {det.get('compared', 0) - det.get('mismatch', 0)} of {det.get('compared', 0)} comparisons" + (f"; errors: {cell(r['errors'][:3])}" if r.get("errors") else ""))
                     for h, m in (r.get("memory") or {}).items():
                         md.append(f"- host `{cell(h)}`: container memory {m['before_mb']} → {m['after_drain_mb']} MB after the drain (**{m['growth_mb']:+} MB**, {m['growth_mb_per_1000_requests']:+} MB per 1000 requests); descriptors {m.get('fds_before')} → {m.get('fds_after')}")
+            md.append("")
+        elif s == "endurance":
+            md.append("| target | rep | probe (minute) | decode tok/s | prefill tok/s | aggregate tok/s | head memory MB | canary | errors |\n|---|---|---|---|---|---|---|---|---|")
+            for n in names:
+                for i, r in enumerate(R[s].get(n, [])):
+                    ref = (r.get("probes") or [{}])[0].get("canary_sha")
+                    for p in r.get("probes", []):
+                        hm = next(iter((p.get("memory") or {}).values()), {}).get("mem_mb", "—")
+                        md.append(f"| `{cell(n)}` | {i} | {p.get('minute')} | **{p.get('decode_tps', '—')}** | {p.get('prefill_tps', '—')} | {p.get('aggregate_tps', '—')} | {hm} | {tick(p.get('canary_sha') == ref)} | {len(p.get('errors') or [])} |")
+            bars = []
+            for n in names:
+                for i, r in enumerate(R[s].get(n, [])):
+                    d = r.get("drift") or {}
+                    md.append(f"\n`{cell(n)}` rep {i}: {r.get('minutes')} min under load ({json.dumps(r.get('load'))}); drift of the last probe against the first: decode {d.get('decode_pct'):+}% · prefill {d.get('prefill_pct'):+}% · aggregate {d.get('aggregate_pct'):+}%; worst decode probe {d.get('worst_decode_pct'):+}% at minute {d.get('worst_at_minute')}; canary mismatches {r.get('canary_bad', 0)}" if d.get("decode_pct") is not None else f"\n`{cell(n)}` rep {i}: {r.get('minutes')} min; no drift computed (a probe failed)")
+                    for h, m in (r.get("memory") or {}).items():
+                        md.append(f"- host `{cell(h)}`: container memory {m['first_mb']} → {m['last_mb']} MB over the run (**{m['growth_mb']:+} MB**); descriptors {m.get('fds_first')} → {m.get('fds_last')}")
+                    for p in r.get("probes", []):
+                        if p.get("decode_tps"): bars.append((f"{n} rep {i} min {p['minute']}", p["decode_tps"], n == cand))
+            if bars:
+                charts["endurance.svg"] = bar_svg(bars, unit="tok/s", title="Endurance: one-stream decode tokens/s at each probe")
+                md.append("\n![endurance](endurance.svg)")
             md.append("")
         elif s == "fault":
             md.append("| target | case | request failed | head exit | seconds to exit | other ranks | reference equal after restart |\n|---|---|---|---|---|---|---|")

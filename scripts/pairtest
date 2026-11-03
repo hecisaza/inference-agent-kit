@@ -307,8 +307,10 @@ class Switcher:
 
     def to(self, name, t):
         if self.current and config_hash(self.lab, self.current[1]) == config_hash(self.lab, t):
-            self.log(f"{name}: the running configuration ({self.current[0]}) is the same; kept")
-            mark(self.lab, t, name); self.current = (name, t); return
+            if self.lab.dry or api_up(t["api"], t.get("model")):
+                self.log(f"{name}: the running configuration ({self.current[0]}) is the same; kept")
+                mark(self.lab, t, name); self.current = (name, t); return
+            self.log(f"{name}: the running configuration ({self.current[0]}) is the same but does not answer; started afresh")
         t0 = time.time()
         if self.current:
             backend(self.lab, self.current[1]).stop(self.current[1], self.log)

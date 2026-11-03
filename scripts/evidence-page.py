@@ -113,7 +113,7 @@ def main():
     ap.add_argument("--title", default="Pull requests tested on hardware"); ap.add_argument("--intro", default="")
     a = ap.parse_args()
     branches = [b["name"] for b in json.loads(api(f"repos/{a.repo}/branches?per_page=100")) if b["name"].startswith("evidence/")]
-    rows, runs_total, pr_states, irows = [], 0, {}, []
+    rows, runs_total, pr_states, irows, srows = [], 0, {}, [], []
     for br in sorted(branches):
         mi = re.match(r"evidence/(.+)-issue-(\d+)$", br)
         if mi:
@@ -157,6 +157,11 @@ def main():
             state_now = j["state"].lower() + (f" {j.get('mergedAt') or j.get('closedAt') or ''}"[:11] if j["state"] != "OPEN" else ""); title = j["title"]; url = j["url"]
         except subprocess.CalledProcessError:
             pass
+        if title.lower().startswith("sensitivity check"):
+            srows.append({"pr": pr, "url": url, "title": title, "state_now": state_now, "cls": cls, "replies": replies, "perf": perf, "latest": latest,
+                          "mem": next((f for f in facts if f.startswith("concurrency:")), ""), "reason": (vj.get("reasons") or [""])[0] if isinstance(vj.get("reasons"), list) else "",
+                          "links": " · ".join(f'<a href="https://github.com/{a.repo}/tree/{tip}/docs/evidence/{r}">{esc(r)}</a>' for r in runs)})
+            continue
         pr_states[state_now.split()[0]] = pr_states.get(state_now.split()[0], 0) + 1
         hist = bool(vj.get("historical")) or ((man.get("pr_state") or "open") in ("closed", "merged")) or state_now.startswith(("closed", "merged"))
         cur, cur_why = current_rule(vj, facts, cls)
@@ -185,6 +190,15 @@ def main():
                    f'<td>{badge(r["cur"], r["hist"])}' + (f'<div class="small">at the time: {esc(r["cls"])} — {esc(r["cur_why"])}</div>' if r["cur"] != r["cls"] else "") + f'</td><td class="small">{r["links"]}</td></tr>')
     out.append("</tbody></table></div>")
     out.append('<p class="small">Runs judged before the current rule (Nov 1, 2026) show the class the same facts give under it, with the class recorded at the time underneath. A run of a pull request that was closed or merged at execution, or is closed now, is marked HISTORICAL.</p>')
+    if srows:
+        srows.sort(key=lambda r: r["pr"])
+        out.append(f'<h2>Sensitivity check</h2><p class="sub">{len(srows)} deliberately broken changes sent through the same pipeline as every other pull request, to show what it catches. Each must come out NOT READY with the right reason; a RERUN says the measurement was not trusted and is repeated.</p>')
+        out.append('<div class="scroll"><table><thead><tr><th>PR</th><th>What is broken</th><th>Verdict</th><th>Why</th><th>Replies</th><th>Memory after a drain</th><th>Runs</th></tr></thead><tbody>')
+        for r in srows:
+            what = r["title"].split(":", 1)[1].strip() if ":" in r["title"] else r["title"]
+            out.append(f'<tr><td class="pr"><a href="{esc(r["url"])}">#{r["pr"]}</a></td><td>{esc(what)}<div class="small">{esc(r["state_now"])}</div></td><td>{badge(r["cls"], False)}</td><td class="small">{esc(r["reason"])}</td>'
+                       f'<td class="num small">{esc(r["replies"].replace("replies: ", ""))}</td><td class="small">{esc(r["mem"].split("largest host memory growth after a drain ", 1)[-1]) if r["mem"] else "—"}</td><td class="small">{r["links"]}</td></tr>')
+        out.append("</tbody></table></div>")
     if irows:
         iorder = {"FIXED": 0, "FIX FAILS": 1, "FIX PROPOSED": 2, "REPRODUCED": 3, "NEEDS THE LAB": 4, "UNCLEAR": 5, "NOT REPRODUCIBLE HERE": 6, "TRIAGED": 7, "OUT OF SCOPE": 8}
         irows.sort(key=lambda r: (iorder.get(r["cls"], 9), -r["n"]))
@@ -199,7 +213,7 @@ def main():
     out.append('<h2>How to read the verdicts</h2><p><span class="badge ready">READY</span> every regression check passed, no slowdown beyond the calibrated band, and audited evidence verifies the claim (a claim or reproduction script, or the PR\'s own tests, that fail on the base and pass on the PR and that the second opinion inspected and found sound; or a claimed speed-up measured beyond the band that it supports). <span class="badge safe">SAFE, UNVERIFIED</span> nothing regressed, nothing slowed down, the claim is not verified to that standard. <span class="badge block">NOT READY</span> a failed suite, unexplained reply differences, a slowdown confirmed over repetitions, a failing claim test, a patch-number collision, or a contradicting second opinion. <span class="badge info">RERUN</span> the measurement is not trustworthy (incomplete matrix, control failure, a script error, a single-repetition slowdown). <span class="badge hist">HISTORICAL</span> the PR was closed or merged when the run executed: a record, not current readiness.</p>')
     out.append('<div class="foot">Method and tooling: <a href="https://github.com/hecisaza/inference-agent-kit">inference-agent-kit</a>. A run folder holds the report, the raw results.json, the executed script, the PR\'s own tests\' raw output, the second opinion, the verdict and the run manifest. Nothing on this page was posted to the upstream repository.</div></div>')
     open(a.out, "w").write("\n".join(out) + "\n")
-    print(f"wrote {a.out}: {len(rows)} PRs, {runs_total} runs, counts {counts}; {len(irows)} issues")
+    print(f"wrote {a.out}: {len(rows)} PRs, {runs_total} runs, counts {counts}; {len(irows)} issues; {len(srows)} sensitivity PRs")
 
 
 if __name__ == "__main__":

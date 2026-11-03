@@ -105,6 +105,25 @@ rm -rf "$vd"
 r=$(python3 scripts/pairtest run --lab tests/lab-fake.yaml --target a --compare b --suite perf --opt perf_rounds=1 --opt perf_words=40 --opt perf_streams=2 --runs /tmp/selftest-runs 2>&1); rc=$?
 rep=$(ls -dt /tmp/selftest-runs/2*/ 2>/dev/null | head -1)
 [ "$rc" = 0 ] && grep -q "decode tok/s" "$rep/report.md" && [ -s "$rep/perf-decode.svg" ] && ok "perf suite: decode, prefill and aggregate measured on both targets, charts written" || bad "perf suite: rc=$rc $(echo "$r" | tail -3)"
+# endurance suite against the fake servers: probes, drift and the report section; the verdict's endurance rules on fabricated drift
+r=$(python3 scripts/pairtest run --lab tests/lab-fake.yaml --target a --compare b --suite endurance --opt endurance_minutes=0.12 --opt endurance_probe_minutes=0.05 --opt endurance_workers=2 --runs /tmp/selftest-runs 2>&1); rc=$?
+rep=$(ls -dt /tmp/selftest-runs/*/ | head -1)
+[ "$rc" = 0 ] && python3 -c "
+import json, sys; R = json.load(open('$rep/results.json')); e = R['endurance']
+for t in ('a', 'b'):
+    r = e[t][0]; assert len(r['probes']) >= 2, r['probes']; assert r['drift']['decode_pct'] is not None, r['drift']; assert r['canary_bad'] == 0
+" && grep -q "probe (minute)" "$rep/report.md" && grep -q "drift of the last probe against the first" "$rep/report.md" && grep -q "Endurance: one-stream decode" "$rep/endurance.svg" && ok "endurance suite: probes at intervals under load, drift computed, canary stable, report section and chart" || bad "endurance suite: rc=$rc $(tail -2 <<<"$r") $(python3 -c "import json; R=json.load(open('$rep/results.json'))['endurance']; print({t: (r[0]['errors'][:2], r[0]['drift']) for t, r in R.items()})" 2>&1 | cut -c1-400)"
+ve=$(mktemp -d); mkdir -p "$ve/r"; python3 - "$ve/r" <<'PY'
+import json, sys, os
+d = sys.argv[1]
+def run(worst, growth, canary): return {"ok": True, "minutes": 120, "probes": [{"minute": 0, "decode_tps": 58.0}, {"minute": 120, "decode_tps": 58.0 * (1 + worst / 100)}],
+                                        "drift": {"decode_pct": worst, "prefill_pct": 0.0, "aggregate_pct": 0.0, "worst_decode_pct": worst, "worst_at_minute": 120}, "memory": {"h": {"first_mb": 3000, "last_mb": 3000 + growth, "growth_mb": growth}}, "canary_bad": canary, "load": {}, "errors": []}
+R = {"meta": {"candidate": "pr", "control": "base", "targets_order": ["pr", "base"], "suites": ["smoke", "endurance"], "targets": {"pr": {"artifact_id": "x"}, "base": {"artifact_id": "y"}}, "restore": "live restored (verified: API answers, running artifact is live's)"},
+     "smoke": {"pr": [{"ok": True}], "base": [{"ok": True}]}, "endurance": {"pr": [run(-25.0, 900, 0)], "base": [run(-2.0, 20, 0)]}}
+json.dump(R, open(os.path.join(d, "results.json"), "w"))
+PY
+python3 scripts/verdict.py "$ve/r" > "$ve/o" 2>&1 && grep -q "NOT READY" "$ve/o" && grep -q "throughput drifts down over time on the candidate" "$ve/r/VERDICT.md" && grep -q "host memory grows over the run on the candidate" "$ve/r/VERDICT.md" && ok "verdict: endurance drift and memory growth beyond the control block" || bad "verdict endurance: $(cat "$ve/o")"
+rm -rf "$ve"
 # concurrency suite against the fake servers: stages run, batched replies match serial (the fake is deterministic), no container -> no memory samples
 r=$(python3 scripts/pairtest run --lab tests/lab-fake.yaml --target a --compare b --suite concurrency --opt conc_rounds=1 --opt conc_tokens=8 --opt conc_streams=1,4 --runs /tmp/selftest-runs 2>&1); rc=$?
 rep=$(ls -dt /tmp/selftest-runs/2*/ 2>/dev/null | head -1)

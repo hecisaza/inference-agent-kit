@@ -191,6 +191,21 @@ def main():
             elif x.get("tiny") and abs(x["delta"]) > x["band"]: n += f", {abs(x['candidate'] - x['control']):.2f} s apart, below the {ABS_FLOOR[x['metric']]:g} s floor: not called"
             return n + ")"
         facts.append(f"performance against the control ({band_note}): " + " · ".join(perf_note(x) for x in perf))
+    # endurance: a candidate whose throughput drifts down over hours beyond the control's drift, or whose memory grows past the
+    # control's by more than 512 MB over the run, is blocked; a canary reply that changes mid-run is a failure of its own
+    if "endurance" in R and cand in R["endurance"] and ctrl in R["endurance"]:
+        def drift(t, key): return min([(r.get("drift") or {}).get(key) for r in R["endurance"].get(t, []) if (r.get("drift") or {}).get(key) is not None] or [0.0])  # noqa: E306
+        def growth(t): return max([m.get("growth_mb", 0) for r in R["endurance"].get(t, []) for m in (r.get("memory") or {}).values()] or [0])  # noqa: E306
+        def canary(t): return sum(r.get("canary_bad", 0) for r in R["endurance"].get(t, []))  # noqa: E306
+        wc, wk, gc, gk = drift(cand, "worst_decode_pct"), drift(ctrl, "worst_decode_pct"), growth(cand), growth(ctrl)
+        mins = max([r.get("minutes", 0) for r in R["endurance"].get(cand, [])] or [0])
+        facts.append(f"endurance ({mins} min under load): worst decode probe against the first, candidate {wc:+}% / control {wk:+}%; memory growth over the run candidate {gc:+} MB / control {gk:+} MB; canary mismatches candidate {canary(cand)}, control {canary(ctrl)}")
+        if wc < wk - 10:
+            blockers.append(f"throughput drifts down over time on the candidate (worst decode probe {wc:+}% against the first, control {wk:+}%)")
+        if gc > gk + 512:
+            blockers.append(f"host memory grows over the run on the candidate ({gc:+} MB) beyond the control ({gk:+} MB)")
+        if canary(cand) and not canary(ctrl):
+            blockers.append(f"a canary reply changed mid-run on the candidate ({canary(cand)} probes)")
     # sustained concurrency: batched replies must match serial ones; host memory after a drain must not grow more than on the control
     conc_block = []
     if "concurrency" in R and cand in R["concurrency"]:
