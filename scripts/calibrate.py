@@ -8,7 +8,10 @@ the band of each metric is the largest |delta| seen, times --factor, never below
 --provisional writes bands given on the command line (for example from same-patch runs with different image ids)
 and marks the file provisional; it expires sooner. The file carries its source and an expiry date: after a hardware,
 driver, engine or workload change, calibrate again."""
-import argparse, datetime, json, os, statistics, sys
+import argparse, datetime, importlib.util, json, os, statistics, sys
+
+_spec = importlib.util.spec_from_file_location("verdict", os.path.join(os.path.dirname(os.path.abspath(__file__)), "verdict.py"))
+verdict = importlib.util.module_from_spec(_spec); _spec.loader.exec_module(verdict)
 
 PERF = [("decode", "perf", lambda r: r.get("decode_tps") or [], 1), ("prefill", "perf", lambda r: r.get("prefill_tps") or [], 1),
         ("aggregate", "perf", lambda r: r.get("batch_tps") or [], 1), ("cut-in", "cutin", lambda r: [x.get("short") for x in r.get("rounds", [])], -1),
@@ -50,7 +53,8 @@ def main():
             c, nc = med(R, suite, cand, pick); k, nk = med(R, suite, ctrl, pick)
             if c is None or k is None or not k or min(nc, nk) < 2:
                 continue
-            d = abs(sign * (c - k) / k)
+            pr = verdict.paired(R, suite, cand, ctrl, pick, sign)   # the same estimator the verdict uses
+            d = abs(pr[0]) if pr and pr[1] >= 2 else abs(sign * (c - k) / k)
             if d > a.ceiling:
                 sys.exit(f"{run}: {name} differs by {d:.1%} between two copies of the same image (ceiling {a.ceiling:.0%}); that is a "
                          "measurement fault (a warm cache, a kept process, a throttled host), not noise: fix the run, do not write bands from it")

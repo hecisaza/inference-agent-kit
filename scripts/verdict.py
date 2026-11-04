@@ -77,8 +77,27 @@ def series(R, suite, target, pick):
     return statistics.median(xs), len(xs)
 
 
+def paired(R, suite, cand, ctrl, pick, sign):
+    """The candidate against the control round by round: within a repetition both targets get the same prompts in the
+    same order, so round i of one is compared with round i of the other, and the median of those ratios is the
+    difference. A speed that depends on the prompt (speculative decoding's acceptance does) then cancels out, where a
+    median over each side's pooled rounds can move by a percent or two with one round. Null when the rounds do not
+    pair (different repetition counts or round counts)."""
+    rc, rk = R.get(suite, {}).get(cand, []), R.get(suite, {}).get(ctrl, [])
+    if len(rc) != len(rk):
+        return None
+    diffs = []
+    for a, b in zip(rc, rk):
+        xs, ys = pick(a), pick(b)
+        if len(xs) != len(ys):
+            return None
+        diffs += [sign * (x - y) / y for x, y in zip(xs, ys) if isinstance(x, (int, float)) and isinstance(y, (int, float)) and y]
+    return (statistics.median(diffs), len(diffs)) if diffs else None
+
+
 def performance(R, cand, ctrl, bands):
-    """Candidate against control per metric: + is better (throughput up, latency and startup down). A difference
+    """Candidate against control per metric: + is better (throughput up, latency and startup down). The difference is
+    the median of the round-by-round ratios when the rounds pair (``paired``), else the ratio of each side's median. It
     counts only beyond the metric's calibrated band (or its floor without a calibration). Neither side's own scatter
     widens the band. A metric with a single sample on either side is reported, never called."""
     out = []
@@ -86,10 +105,13 @@ def performance(R, cand, ctrl, bands):
         c, nc = series(R, suite, cand, pick); k, nk = series(R, suite, ctrl, pick)
         if c is None or k is None or not k:
             continue
-        band = (bands or {}).get(name, FLOOR[name]); delta = sign * (c - k) / k
+        band = (bands or {}).get(name, FLOOR[name])
+        pr = paired(R, suite, cand, ctrl, pick, sign)
+        delta = pr[0] if pr and pr[1] >= 2 else sign * (c - k) / k
         call = "slower" if delta < -band else ("faster" if delta > band else "same"); single = min(nc, nk) < 2
         tiny = abs(c - k) < ABS_FLOOR.get(name, 0.0)   # a latency difference below the absolute floor is noise at any ratio
-        out.append({"metric": name, "delta": delta, "band": band, "candidate": c, "control": k, "call": "same" if (single or tiny) else call, "single": single, "tiny": tiny})
+        out.append({"metric": name, "delta": delta, "band": band, "candidate": c, "control": k, "call": "same" if (single or tiny) else call, "single": single, "tiny": tiny,
+                    "paired": bool(pr and pr[1] >= 2), "pooled": sign * (c - k) / k})
     return out
 
 
@@ -190,7 +212,7 @@ def main():
             if x.get("single"): n += ", one sample a side: not called"
             elif x.get("tiny") and abs(x["delta"]) > x["band"]: n += f", {abs(x['candidate'] - x['control']):.2f} s apart, below the {ABS_FLOOR[x['metric']]:g} s floor: not called"
             return n + ")"
-        facts.append(f"performance against the control ({band_note}): " + " · ".join(perf_note(x) for x in perf))
+        facts.append(f"performance against the control ({band_note}; " + ("round by round" if any(x.get("paired") for x in perf) else "medians") + "): " + " · ".join(perf_note(x) for x in perf))
     # endurance: a candidate whose throughput drifts down over hours beyond the control's drift, or whose memory grows past the
     # control's by more than 512 MB over the run, is blocked; a canary reply that changes mid-run is a failure of its own
     if "endurance" in R and cand in R["endurance"] and ctrl in R["endurance"]:

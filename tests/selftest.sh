@@ -105,6 +105,25 @@ rm -rf "$vd"
 r=$(python3 scripts/pairtest run --lab tests/lab-fake.yaml --target a --compare b --suite perf --opt perf_rounds=1 --opt perf_words=40 --opt perf_streams=2 --runs /tmp/selftest-runs 2>&1); rc=$?
 rep=$(ls -dt /tmp/selftest-runs/2*/ 2>/dev/null | head -1)
 [ "$rc" = 0 ] && grep -q "decode tok/s" "$rep/report.md" && [ -s "$rep/perf-decode.svg" ] && ok "perf suite: decode, prefill and aggregate measured on both targets, charts written" || bad "perf suite: rc=$rc $(echo "$r" | tail -3)"
+# the perf comparison is paired round by round: a prompt-dependent speed (two modes) whose pooled medians differ by 2 %
+# is not called, while a uniform 4 % slowdown is
+vp=$(mktemp -d); mkdir -p "$vp/a" "$vp/b"; python3 - "$vp" <<'PY'
+import json, sys, os
+d = sys.argv[1]
+def run(cand_rounds, ctrl_rounds):
+    perf = lambda rounds: [{"ok": True, "decode_tps": r, "prefill_tps": [3000.0] * len(r), "batch_tps": [130.0] * len(r)} for r in rounds]
+    return {"meta": {"candidate": "pr", "control": "base", "targets_order": ["pr", "base"], "suites": ["smoke", "perf"], "targets": {"pr": {"artifact_id": "x"}, "base": {"artifact_id": "y"}}, "restore": "live restored (verified: API answers, running artifact is live's)"},
+            "smoke": {"pr": [{"ok": True}], "base": [{"ok": True}]}, "perf": {"pr": perf(cand_rounds), "base": perf(ctrl_rounds)}}
+# the same prompts on both sides; each round's speed is one of two modes, identical between the builds except one round
+modes_c = [[57.4, 57.3, 59.6], [58.1, 56.8, 61.5], [56.2, 63.1, 58.0], [60.9, 57.1, 57.0]]
+modes_k = [[59.6, 57.1, 59.6], [59.1, 56.6, 61.7], [55.6, 63.4, 58.5], [60.8, 56.5, 56.9]]
+json.dump(run(modes_c, modes_k), open(os.path.join(d, "a", "results.json"), "w"))
+json.dump(run([[v * 0.96 for v in r] for r in modes_k], modes_k), open(os.path.join(d, "b", "results.json"), "w"))
+PY
+python3 scripts/calibrate.py --out "$vp/noise.json" --provisional decode=0.01 prefill=0.01 aggregate=0.03 >/dev/null
+python3 scripts/verdict.py "$vp/a" --noise "$vp/noise.json" > "$vp/oa" 2>&1; python3 scripts/verdict.py "$vp/b" --noise "$vp/noise.json" > "$vp/ob" 2>&1
+! grep -q "decode .*slower" "$vp/a/VERDICT.md" && grep -q "round by round" "$vp/a/VERDICT.md" && grep -q "decode -4% (±1%, slower)" "$vp/b/VERDICT.md" && ok "verdict: performance compared round by round (a two-mode speed with a 2 % pooled-median gap is not called; a uniform 4 % slowdown is)" || bad "verdict paired: $(cat "$vp/a/VERDICT.md" "$vp/b/VERDICT.md" | grep performance)"
+rm -rf "$vp"
 # endurance suite against the fake servers: probes, drift and the report section; the verdict's endurance rules on fabricated drift
 r=$(python3 scripts/pairtest run --lab tests/lab-fake.yaml --target a --compare b --suite endurance --opt endurance_minutes=0.12 --opt endurance_probe_minutes=0.05 --opt endurance_workers=2 --runs /tmp/selftest-runs 2>&1); rc=$?
 rep=$(ls -dt /tmp/selftest-runs/*/ | head -1)
