@@ -7,8 +7,9 @@ const reply_text = @import("reply_text.zig");
 const D = "\u{ff5c}DSML\u{ff5c}";
 const tool_stream = @import("tool_stream.zig");
 
-fn streamedCalls(a: std.mem.Allocator, text: []const u8, tools: []const json.Value) !?[]const u8 {
+fn streamedCalls(a: std.mem.Allocator, text: []const u8, tools: []const json.Value, dsml_template: bool) !?[]const u8 {
     var s = try tool_stream.Streamer.init(a, tools);
+    if (dsml_template and @hasField(tool_stream.Streamer, "calls_off")) s.calls_off = true;
     var out: std.ArrayList(json.Value) = .empty;
     for (1..text.len + 1) |n| try s.feed(text[0..n], &out); // byte by byte, as the answer grows
     if (!s.streamed) return null;
@@ -199,7 +200,8 @@ test "fuzz" {
             if (!std.mem.startsWith(u8, shown, before)) retracts = true;
             before = try a.dupe(u8, shown);
         }
-        const streamed = (try streamedCalls(a, text, tools)) orelse calls.items;
-        std.debug.print("\nFUZZ {d}\t{d}\t{s}\t{f}\t{f}\t{s}\t{f}\t{s}\n", .{ case, ncalls, calls.items, std.zig.fmtString(r.content), std.zig.fmtString(before), if (retracts) "RETRACTS" else "ok", std.zig.fmtString(text), streamed });
+        const streamed = (try streamedCalls(a, text, tools, false)) orelse calls.items;
+        const streamed_dsml = (try streamedCalls(a, text, tools, true)) orelse calls.items;
+        std.debug.print("\nFUZZ {d}\t{d}\t{s}\t{f}\t{f}\t{s}\t{f}\t{s}\t{s}\n", .{ case, ncalls, calls.items, std.zig.fmtString(r.content), std.zig.fmtString(before), if (retracts) "RETRACTS" else "ok", std.zig.fmtString(text), streamed, streamed_dsml });
     }
 }

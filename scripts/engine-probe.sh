@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# engine-probe.sh --tree DIR --patch FILE [--probe DIR] [--zig ZIG] [--out DIR]
+# engine-probe.sh --tree DIR --patch FILE [--probe DIR] [--zig ZIG] [--out DIR] [--template tool_call|dsml]
 #
 # Runs a directory of Zig probe tests against an engine source tree twice, without and with a patch, and compares
 # what each kind of client receives. The default probes (probes/tensorfold-tools) are for TensorFold's server:
@@ -15,11 +15,11 @@
 # summary (scripts/engine-probe-summary.py). Read-only on the lab: nothing here touches a server.
 set -euo pipefail
 KIT=$(cd "$(dirname "$0")/.." && pwd)
-TREE=""; PATCH=""; PROBES="$KIT/probes/tensorfold-tools"; ZIG=${ZIG:-zig}; OUT=""
+TREE=""; PATCH=""; PROBES="$KIT/probes/tensorfold-tools"; ZIG=${ZIG:-zig}; OUT=""; TEMPLATE=tool_call
 while [ $# -gt 0 ]; do
   case "$1" in
     --tree) TREE=$2; shift 2;; --patch) PATCH=$2; shift 2;; --probe) PROBES=$2; shift 2;; --zig) ZIG=$2; shift 2;;
-    --out) OUT=$2; shift 2;; -h|--help) sed -n '2,18p' "$0"; exit 0;; *) echo "unknown argument $1" >&2; exit 1;;
+    --out) OUT=$2; shift 2;; --template) TEMPLATE=$2; shift 2;; -h|--help) sed -n '2,18p' "$0"; exit 0;; *) echo "unknown argument $1" >&2; exit 1;;
   esac
 done
 [ -d "$TREE/zig/src/server" ] && [ -f "$PATCH" ] || { echo "usage: engine-probe.sh --tree DIR --patch FILE" >&2; exit 1; }
@@ -34,4 +34,4 @@ run() {  # run SIDE: every probe on the tree as it is now
 }
 run base
 git -C "$TREE" apply "$PATCH"; run patch; git -C "$TREE" checkout -q -- . && git -C "$TREE" clean -fdq
-python3 "$KIT/scripts/engine-probe-summary.py" "$OUT"
+python3 "$KIT/scripts/engine-probe-summary.py" "$OUT" --template "$TEMPLATE"
