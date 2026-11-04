@@ -29,6 +29,7 @@ def main():
     ap.add_argument("runs", nargs="*"); ap.add_argument("--out", required=True); ap.add_argument("--factor", type=float, default=1.5)
     ap.add_argument("--days", type=int, default=None); ap.add_argument("--provisional", nargs="*"); ap.add_argument("--note", default="")
     ap.add_argument("--ceiling", type=float, default=0.25, help="largest same-image delta accepted as noise (default 25 %%)")
+    ap.add_argument("--no-narrower-than", help="an earlier calibration file: no band is set narrower than it was (few runs cannot justify tightening)")
     a = ap.parse_args()
     today = datetime.date.today()
     if a.provisional is not None:
@@ -53,7 +54,7 @@ def main():
             c, nc = med(R, suite, cand, pick); k, nk = med(R, suite, ctrl, pick)
             if c is None or k is None or not k or min(nc, nk) < 2:
                 continue
-            pr = verdict.paired(R, suite, cand, ctrl, pick, sign)   # the same estimator the verdict uses
+            pr = verdict.paired(R, name, suite, cand, ctrl, pick, sign)   # the same estimator the verdict uses
             d = abs(pr[0]) if pr and pr[1] >= 2 else abs(sign * (c - k) / k)
             if d > a.ceiling:
                 sys.exit(f"{run}: {name} differs by {d:.1%} between two copies of the same image (ceiling {a.ceiling:.0%}); that is a "
@@ -62,8 +63,14 @@ def main():
     if not worst:
         sys.exit("no comparable metrics with at least two samples a side")
     bands = {k: round(max(0.01, v * a.factor), 4) for k, v in worst.items()}
-    out = {"bands": bands, "provisional": False, "source": f"same-image runs {', '.join(used)} (image {', '.join(sorted(images))}), factor {a.factor}",
-           "observed": {k: round(v, 4) for k, v in worst.items()}, "measured": today.isoformat(), "expires": (today + datetime.timedelta(days=a.days or 30)).isoformat()}
+    if a.no_narrower_than:
+        prev = json.load(open(a.no_narrower_than)).get("bands", {})
+        bands = {k: max(v, prev.get(k, 0.0)) for k, v in bands.items()}
+        bands.update({k: v for k, v in prev.items() if k not in bands})
+    few = len(used) < 5   # a handful of same-image runs bounds nothing statistically: provisional, to be validated prospectively
+    out = {"bands": bands, "provisional": few, "source": f"same-image runs {', '.join(used)} (image {', '.join(sorted(images))}), factor {a.factor}"
+           + ("; perf metrics compared round by round" ) + (f"; no band narrower than {os.path.basename(a.no_narrower_than)}" if a.no_narrower_than else ""),
+           "observed": {k: round(v, 4) for k, v in worst.items()}, "measured": today.isoformat(), "expires": (today + datetime.timedelta(days=a.days or (14 if few else 30))).isoformat()}
     json.dump(out, open(a.out, "w"), indent=1)
     print("bands:", bands, "from observed", out["observed"], "expires", out["expires"])
 

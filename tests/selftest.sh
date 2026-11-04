@@ -122,8 +122,27 @@ json.dump(run([[v * 0.96 for v in r] for r in modes_k], modes_k), open(os.path.j
 PY
 python3 scripts/calibrate.py --out "$vp/noise.json" --provisional decode=0.01 prefill=0.01 aggregate=0.03 >/dev/null
 python3 scripts/verdict.py "$vp/a" --noise "$vp/noise.json" > "$vp/oa" 2>&1; python3 scripts/verdict.py "$vp/b" --noise "$vp/noise.json" > "$vp/ob" 2>&1
-! grep -q "decode .*slower" "$vp/a/VERDICT.md" && grep -q "round by round" "$vp/a/VERDICT.md" && grep -q "decode -4% (±1%, slower)" "$vp/b/VERDICT.md" && ok "verdict: performance compared round by round (a two-mode speed with a 2 % pooled-median gap is not called; a uniform 4 % slowdown is)" || bad "verdict paired: $(cat "$vp/a/VERDICT.md" "$vp/b/VERDICT.md" | grep performance)"
+! grep -q "decode .*slower" "$vp/a/VERDICT.md" && grep -q "decode +0.1% (±1%, paired by position, 12 rounds)" "$vp/a/VERDICT.md" && grep -q "decode -4.0% (±1%, paired by position, 12 rounds, slower)" "$vp/b/VERDICT.md" && ok "verdict: performance compared round by round (a two-mode speed with a 2 % pooled-median gap is not called; a uniform 4 % slowdown is)" || bad "verdict paired: $(cat "$vp/a/VERDICT.md" "$vp/b/VERDICT.md" | grep performance)"
 rm -rf "$vp"
+# pairing by recorded key: a round missing on one side is left out and counted, not shifted against its neighbour; a
+# definite failure (a failed suite) stands as NOT READY even when a single-repetition slowdown asks for a rerun
+vk=$(mktemp -d); mkdir -p "$vk/k" "$vk/p"; python3 - "$vk" <<'PY'
+import json, sys, os
+d = sys.argv[1]
+meta = {"candidate": "pr", "control": "base", "targets_order": ["pr", "base"], "suites": ["smoke", "perf"], "targets": {"pr": {"artifact_id": "x"}, "base": {"artifact_id": "y"}}, "restore": "live restored (verified: API answers, running artifact is live's)"}
+# candidate lost round 1; its other rounds equal the control's: keyed pairing reads 0 %, positional would compare 0 with 1
+c = {"ok": True, "decode_tps": [50.0, 70.0], "decode_keys": ["0:a", "2:c"], "prefill_tps": [3000.0, 3000.0], "prefill_keys": ["0:a", "2:c"], "batch_tps": [130.0, 130.0], "batch_keys": ["0:a", "2:c"]}
+k = {"ok": True, "decode_tps": [50.0, 60.0, 70.0], "decode_keys": ["0:a", "1:b", "2:c"], "prefill_tps": [3000.0] * 3, "prefill_keys": ["0:a", "1:b", "2:c"], "batch_tps": [130.0] * 3, "batch_keys": ["0:a", "1:b", "2:c"]}
+json.dump({"meta": meta, "smoke": {"pr": [{"ok": True}], "base": [{"ok": True}]}, "perf": {"pr": [c], "base": [k]}}, open(os.path.join(d, "k", "results.json"), "w"))
+# one repetition: a failed smoke check on the candidate, and a 5 % decode slowdown
+slow = {"ok": True, "decode_tps": [57.0, 57.0, 57.0], "prefill_tps": [3000.0] * 3, "batch_tps": [130.0] * 3}
+base = {"ok": True, "decode_tps": [60.0, 60.0, 60.0], "prefill_tps": [3000.0] * 3, "batch_tps": [130.0] * 3}
+json.dump({"meta": meta, "smoke": {"pr": [{"ok": False}], "base": [{"ok": True}]}, "perf": {"pr": [slow], "base": [base]}}, open(os.path.join(d, "p", "results.json"), "w"))
+PY
+python3 scripts/calibrate.py --out "$vk/noise.json" --provisional decode=0.01 prefill=0.01 aggregate=0.03 >/dev/null
+python3 scripts/verdict.py "$vk/k" --noise "$vk/noise.json" >/dev/null 2>&1; python3 scripts/verdict.py "$vk/p" --noise "$vk/noise.json" >/dev/null 2>&1
+grep -q "decode +0.0% (±1%, paired by prompt, 2 rounds, 1 unpaired)" "$vk/k/VERDICT.md" && grep -q "Merge readiness: NOT READY" "$vk/p/VERDICT.md" && grep -q "also: a slowdown in a single repetition" "$vk/p/VERDICT.md" && ok "verdict: rounds pair by recorded key (a missing round is counted, not shifted); a failed suite outranks a single-repetition slowdown" || bad "verdict keyed/precedence: $(grep -h 'decode\|Merge readiness' "$vk/k/VERDICT.md" "$vk/p/VERDICT.md" | head -4)"
+rm -rf "$vk"
 # endurance suite against the fake servers: probes, drift and the report section; the verdict's endurance rules on fabricated drift
 r=$(python3 scripts/pairtest run --lab tests/lab-fake.yaml --target a --compare b --suite endurance --opt endurance_minutes=0.12 --opt endurance_probe_minutes=0.05 --opt endurance_workers=2 --runs /tmp/selftest-runs 2>&1); rc=$?
 rep=$(ls -dt /tmp/selftest-runs/*/ | head -1)
@@ -177,7 +196,7 @@ R["perf"] = {ctrl: [{"ok": True, "decode_tps": [100.0, 101.0, 99.0], "prefill_tp
 R["startup"] = {ctrl: [{"ok": True, "seconds_per_start": [170.0]}], cand: [{"ok": True, "seconds_per_start": [180.0]}]}   # one sample a side, 6 % slower
 os.makedirs(f"{d}/startup", exist_ok=True); json.dump(R, open(f"{d}/startup/results.json", "w"))
 PY
-python3 scripts/verdict.py "$pv/startup" > "$pv/o5" 2>&1 && ! grep -q "NOT READY" "$pv/o5" && grep -q "startup -6%.*one sample a side: not called" "$pv/startup/VERDICT.md" && ok "verdict.py: a single-sample startup difference is reported, never called" || bad "verdict startup single sample: $(cat "$pv/o5") $(grep startup "$pv/startup/VERDICT.md")"
+python3 scripts/verdict.py "$pv/startup" > "$pv/o5" 2>&1 && ! grep -q "NOT READY" "$pv/o5" && grep -q "startup -5.9%.*one sample a side: not called" "$pv/startup/VERDICT.md" && ok "verdict.py: a single-sample startup difference is reported, never called" || bad "verdict startup single sample: $(cat "$pv/o5") $(grep startup "$pv/startup/VERDICT.md")"
 printf 'Faster prefill\n\nThis change raises prefill throughput.\n' > "$pv/PR-perf.md"; printf 'Docs\n\nA wording fix.\n' > "$pv/PR-docs.md"
 printf '**EVIDENCE SUPPORTS THE CLAIM** — the speed-up is there.\n' > "$pv/REVIEW-supports.md"
 python3 scripts/verdict.py "$pv/fast" --pr-file "$pv/PR-perf.md" --review "$pv/REVIEW-supports.md" > "$pv/o2" 2>&1 && grep -q "READY.*speed-up the pull request claims was measured" "$pv/o2" && ! grep -q "NOT READY" "$pv/o2" && ok "verdict.py: a claimed speed-up, measured and supported by the second opinion -> READY" || bad "verdict fast: $(cat "$pv/o2")"
@@ -238,7 +257,7 @@ R["perf"] = {ctrl: [base], cand: [{**base, "decode_tps": [101.0, 102.0, 100.0]}]
 os.makedirs(f"{pv}/same", exist_ok=True); json.dump(R, open(f"{pv}/same/results.json", "w"))
 R["meta"]["targets"][cand]["artifact_id"] = "otherimage002"; os.makedirs(f"{pv}/mixed", exist_ok=True); json.dump(R, open(f"{pv}/mixed/results.json", "w"))
 PY
-python3 scripts/calibrate.py --out "$pv/noise-cal.json" "$pv/same" > "$pv/o10" 2>&1 && grep -q '"provisional": false' "$pv/noise-cal.json" && python3 -c "import json,sys; b=json.load(open(sys.argv[1]))['bands']; assert 0.01 <= b['decode'] <= 0.03, b" "$pv/noise-cal.json" && ok "calibrate.py: bands from a same-image run (decode band from a 1 % observed difference)" || bad "calibrate same-image: $(cat "$pv/o10")"
+python3 scripts/calibrate.py --out "$pv/noise-cal.json" "$pv/same" > "$pv/o10" 2>&1 && grep -q '"provisional": true' "$pv/noise-cal.json" && python3 -c "import json,sys; b=json.load(open(sys.argv[1]))['bands']; assert 0.01 <= b['decode'] <= 0.03, b" "$pv/noise-cal.json" && ok "calibrate.py: bands from a same-image run (decode band from a 1 % observed difference)" || bad "calibrate same-image: $(cat "$pv/o10")"
 python3 scripts/calibrate.py --out "$pv/noise-bad.json" "$pv/mixed" > "$pv/o11" 2>&1; [ $? != 0 ] && grep -q "do not share an artifact id" "$pv/o11" && ok "calibrate.py: a mixed-image run is refused" || bad "calibrate mixed: $(cat "$pv/o11")"
 rm -f "$full_run/hosttests.json"; rm -rf "$ht"
 # evidence-review.sh: bundle (diff, report, results, suites, run facts) + a fake reviewer -> REVIEW.md next to the run

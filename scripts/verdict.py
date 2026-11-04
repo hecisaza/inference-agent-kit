@@ -32,6 +32,9 @@ LABEL = {"READY": "ready", "SAFE, UNVERIFIED": "unverified", "NOT READY": "block
 REVIEW_VERDICTS = ["EVIDENCE UNRELIABLE", "EVIDENCE CONTRADICTS THE CLAIM", "EVIDENCE SUPPORTS THE CLAIM", "NO REGRESSION SHOWN, CLAIM NOT TESTED"]
 FLOOR = {"decode": 0.03, "prefill": 0.03, "aggregate": 0.05, "cut-in": 0.03, "startup": 0.10, "aggregate@16": 0.05}   # used only without a calibration
 ABS_FLOOR = {"cut-in": 0.2, "startup": 10.0}   # seconds: a latency difference smaller than this is never called, whatever the ratio
+# the perf suite's metrics pair round by round (the same prompts for both targets within a repetition); each value has a
+# key (its round and a hash of its prompt) in these fields from 2026-11-04 on, and is paired by position before that
+PAIR_KEYS = {"decode": "decode_keys", "prefill": "prefill_keys", "aggregate": "batch_keys"}
 PERF = [("decode", "perf", lambda r: r.get("decode_tps") or [], 1), ("prefill", "perf", lambda r: r.get("prefill_tps") or [], 1),
         ("aggregate", "perf", lambda r: r.get("batch_tps") or [], 1), ("cut-in", "cutin", lambda r: [x.get("short") for x in r.get("rounds", [])], -1),
         ("startup", "startup", lambda r: r.get("seconds_per_start") or [], -1),
@@ -77,22 +80,33 @@ def series(R, suite, target, pick):
     return statistics.median(xs), len(xs)
 
 
-def paired(R, suite, cand, ctrl, pick, sign):
-    """The candidate against the control round by round: within a repetition both targets get the same prompts in the
-    same order, so round i of one is compared with round i of the other, and the median of those ratios is the
-    difference. A speed that depends on the prompt (speculative decoding's acceptance does) then cancels out, where a
-    median over each side's pooled rounds can move by a percent or two with one round. Null when the rounds do not
-    pair (different repetition counts or round counts)."""
+def paired(R, name, suite, cand, ctrl, pick, sign):
+    """The candidate against the control round by round, for the perf suite's metrics: within a repetition both targets
+    get the same prompts in the same order, so each round of one is compared with the same round of the other, and the
+    median of those ratios is the difference. A speed that depends on the prompt (speculative decoding's acceptance
+    does) then cancels out, where a median over each side's pooled rounds can move by a percent or two with one round.
+    Rounds pair by their recorded key (round and prompt hash) when both sides have one, else by position (results from
+    before keys were recorded). Returns (difference, pairs, how, unpaired) or None for a metric that does not pair."""
+    keyf = PAIR_KEYS.get(name)
     rc, rk = R.get(suite, {}).get(cand, []), R.get(suite, {}).get(ctrl, [])
-    if len(rc) != len(rk):
+    if not keyf or not rc or len(rc) != len(rk):
         return None
-    diffs = []
-    for a, b in zip(rc, rk):
+    diffs, unpaired, how = [], 0, "by prompt"
+    for i, (a, b) in enumerate(zip(rc, rk)):
         xs, ys = pick(a), pick(b)
-        if len(xs) != len(ys):
-            return None
-        diffs += [sign * (x - y) / y for x, y in zip(xs, ys) if isinstance(x, (int, float)) and isinstance(y, (int, float)) and y]
-    return (statistics.median(diffs), len(diffs)) if diffs else None
+        ka, kb = a.get(keyf), b.get(keyf)
+        if ka is not None and kb is not None and len(ka) == len(xs) and len(kb) == len(ys):
+            va, vb = dict(zip(ka, xs)), dict(zip(kb, ys))
+            both = [k for k in va if k in vb]
+            unpaired += len(va) + len(vb) - 2 * len(both)
+            pairs = [(va[k], vb[k]) for k in both]
+        else:
+            how = "by position"
+            if len(xs) != len(ys):
+                return None
+            pairs = list(zip(xs, ys))
+        diffs += [sign * (x - y) / y for x, y in pairs if isinstance(x, (int, float)) and isinstance(y, (int, float)) and x > 0 and y > 0]
+    return (statistics.median(diffs), len(diffs), how, unpaired) if diffs else None
 
 
 def performance(R, cand, ctrl, bands):
@@ -106,12 +120,13 @@ def performance(R, cand, ctrl, bands):
         if c is None or k is None or not k:
             continue
         band = (bands or {}).get(name, FLOOR[name])
-        pr = paired(R, suite, cand, ctrl, pick, sign)
+        pr = paired(R, name, suite, cand, ctrl, pick, sign)
         delta = pr[0] if pr and pr[1] >= 2 else sign * (c - k) / k
         call = "slower" if delta < -band else ("faster" if delta > band else "same"); single = min(nc, nk) < 2
         tiny = abs(c - k) < ABS_FLOOR.get(name, 0.0)   # a latency difference below the absolute floor is noise at any ratio
         out.append({"metric": name, "delta": delta, "band": band, "candidate": c, "control": k, "call": "same" if (single or tiny) else call, "single": single, "tiny": tiny,
-                    "paired": bool(pr and pr[1] >= 2), "pooled": sign * (c - k) / k})
+                    "paired": bool(pr and pr[1] >= 2), "how": (f"paired {pr[2]}, {pr[1]} rounds" + (f", {pr[3]} unpaired" if pr[3] else "")) if pr and pr[1] >= 2 else "medians",
+                    "pooled": sign * (c - k) / k})
     return out
 
 
@@ -207,12 +222,12 @@ def main():
     slow = [x for x in perf if x["call"] == "slower"]; fast = [x for x in perf if x["call"] == "faster"]
     if perf:
         def perf_note(x):
-            n = f"{x['metric']} {x['delta']:+.0%} (±{x['band']:.0%}"
+            n = f"{x['metric']} {x['delta']:+.1%} (±{x['band']:.0%}, {x['how']}"
             if x["call"] != "same": n += f", {x['call']}"
             if x.get("single"): n += ", one sample a side: not called"
             elif x.get("tiny") and abs(x["delta"]) > x["band"]: n += f", {abs(x['candidate'] - x['control']):.2f} s apart, below the {ABS_FLOOR[x['metric']]:g} s floor: not called"
             return n + ")"
-        facts.append(f"performance against the control ({band_note}; " + ("round by round" if any(x.get("paired") for x in perf) else "medians") + "): " + " · ".join(perf_note(x) for x in perf))
+        facts.append(f"performance against the control ({band_note}): " + " · ".join(perf_note(x) for x in perf))
     # endurance: a candidate whose throughput drifts down over hours beyond the control's drift, or whose memory grows past the
     # control's by more than 512 MB over the run, is blocked; a canary reply that changes mid-run is a failure of its own
     if "endurance" in R and cand in R["endurance"] and ctrl in R["endurance"]:
@@ -341,10 +356,11 @@ def main():
     if not integrated and cand_kind != "unknown":
         not_verified.append("the pull request does not merge cleanly onto its current base: tested as the head on its merge-base; a rebase is needed before current readiness can be judged")
 
-    if rerun:
+    timing_only = bool(rerun) and all(r.startswith("a slowdown in a single repetition") for r in rerun)
+    if rerun and not (blockers and timing_only):
         cls = "RERUN"; reasons = rerun + (["also observed: " + "; ".join(blockers)] if blockers else [])
-    elif blockers:
-        cls = "NOT READY"; reasons = blockers
+    elif blockers:   # a definite failure stands even when a single-repetition slowdown asks for a rerun
+        cls = "NOT READY"; reasons = blockers + (["also: " + "; ".join(rerun)] if rerun else [])
     elif verified and integrated:
         cls = "READY"; reasons = ["every suite green, no slowdown beyond the band; " + "; ".join(verified)]
     else:
